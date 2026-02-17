@@ -102,7 +102,7 @@ async def run_agent_loop(
     for _iteration in range(MAX_TOOL_ITERATIONS):
         api_args: dict[str, Any] = {
             "model": model,
-            "max_tokens": max_tokens,
+            "max_tokens": int(max_tokens),
             "system": system_prompt,
             "messages": messages,
         }
