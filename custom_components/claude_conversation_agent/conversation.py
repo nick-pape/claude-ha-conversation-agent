@@ -1,0 +1,161 @@
+"""Conversation support for Claude Conversation Agent."""
+
+from __future__ import annotations
+
+import logging
+from typing import Literal
+
+import anthropic
+
+from homeassistant.components import conversation
+from homeassistant.config_entries import ConfigSubentry
+from homeassistant.const import MATCH_ALL
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+
+from . import ClaudeAgentConfigEntry
+from .agent import ConversationStateManager, run_agent_loop
+from .const import (
+    CONF_CHAT_MODEL,
+    CONF_MAX_TOKENS,
+    CONF_MCP_SERVER_TOKEN,
+    CONF_MCP_SERVER_URL,
+    CONF_PROMPT,
+    CONF_TEMPERATURE,
+    CONVERSATION_STATE_TTL,
+    DEFAULT_CHAT_MODEL,
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_TEMPERATURE,
+    DOMAIN,
+    LOGGER,
+)
+from .entity import ClaudeBaseLLMEntity
+from .mcp_manager import MCPManager
+
+_LOGGER = logging.getLogger(__name__)
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: ClaudeAgentConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+) -> None:
+    """Set up conversation entities."""
+    for subentry in config_entry.subentries.values():
+        if subentry.subentry_type != "conversation":
+            continue
+        async_add_entities(
+            [ClaudeConversationEntity(config_entry, subentry)],
+            config_subentry_id=subentry.subentry_id,
+        )
+
+
+class ClaudeConversationEntity(
+    conversation.ConversationEntity,
+    conversation.AbstractConversationAgent,
+    ClaudeBaseLLMEntity,
+):
+    """Claude conversation agent entity."""
+
+    _attr_supports_streaming = True
+
+    def __init__(
+        self, entry: ClaudeAgentConfigEntry, subentry: ConfigSubentry
+    ) -> None:
+        """Initialize the agent."""
+        super().__init__(entry, subentry)
+        self._attr_supported_features = (
+            conversation.ConversationEntityFeature.CONTROL
+        )
+        self._mcp_manager = MCPManager()
+        self._state_manager = ConversationStateManager(
+            ttl_seconds=CONVERSATION_STATE_TTL
+        )
+
+    @property
+    def supported_languages(self) -> list[str] | Literal["*"]:
+        """Return supported languages."""
+        return MATCH_ALL
+
+    async def async_added_to_hass(self) -> None:
+        """Connect to MCP servers when entity is added."""
+        await super().async_added_to_hass()
+        mcp_url = self.subentry.data.get(CONF_MCP_SERVER_URL)
+        mcp_token = self.subentry.data.get(CONF_MCP_SERVER_TOKEN)
+        if mcp_url:
+            try:
+                await self._mcp_manager.connect(
+                    name="ha",
+                    url=mcp_url,
+                    token=mcp_token,
+                )
+            except Exception:
+                _LOGGER.warning(
+                    "Failed to connect to MCP server at %s. "
+                    "Agent will work without tool access.",
+                    mcp_url,
+                    exc_info=True,
+                )
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Disconnect MCP servers when entity is removed."""
+        await self._mcp_manager.disconnect_all()
+        self._state_manager.clear()
+        await super().async_will_remove_from_hass()
+
+    async def _async_handle_message(
+        self,
+        user_input: conversation.ConversationInput,
+        chat_log: conversation.ChatLog,
+    ) -> conversation.ConversationResult:
+        """Process a conversation turn."""
+        options = self.subentry.data
+
+        # 1. Set up system prompt (no HA native tools)
+        try:
+            await chat_log.async_provide_llm_data(
+                user_input.as_llm_context(DOMAIN),
+                user_llm_hass_api=None,
+                user_llm_prompt=options.get(CONF_PROMPT),
+                user_extra_system_prompt=user_input.extra_system_prompt,
+            )
+        except conversation.ConverseError as err:
+            return err.as_conversation_result()
+
+        # 2. Get or create conversation state
+        state = self._state_manager.get_or_create(chat_log.conversation_id)
+
+        # 3. Get system prompt from chat_log
+        system_prompt = chat_log.content[0].content
+
+        # 4. Run agent loop through chat_log's streaming interface
+        try:
+            async for _ in chat_log.async_add_delta_content_stream(
+                self.entity_id,
+                run_agent_loop(
+                    client=self.entry.runtime_data,
+                    mcp_manager=self._mcp_manager,
+                    system_prompt=system_prompt,
+                    user_text=user_input.text,
+                    conversation_state=state,
+                    model=options.get(CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL),
+                    max_tokens=options.get(CONF_MAX_TOKENS, DEFAULT_MAX_TOKENS),
+                    temperature=options.get(
+                        CONF_TEMPERATURE, DEFAULT_TEMPERATURE
+                    ),
+                ),
+            ):
+                pass
+        except anthropic.AuthenticationError as err:
+            self.entry.async_start_reauth(self.hass)
+            raise HomeAssistantError(
+                "Authentication failed. Please update your API key."
+            ) from err
+        except anthropic.AnthropicError as err:
+            raise HomeAssistantError(
+                f"Error communicating with Claude: {err}"
+            ) from err
+
+        # 5. Return result from chat_log
+        return conversation.async_get_result_from_chat_log(user_input, chat_log)

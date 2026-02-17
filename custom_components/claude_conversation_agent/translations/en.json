@@ -1,0 +1,83 @@
+{
+    "config": {
+        "abort": {
+            "already_configured": "Service is already configured",
+            "reauth_successful": "Re-authentication was successful"
+        },
+        "error": {
+            "authentication_error": "Invalid authentication",
+            "cannot_connect": "Failed to connect",
+            "timeout_connect": "Timeout establishing connection",
+            "unknown": "Unexpected error"
+        },
+        "step": {
+            "user": {
+                "data": {
+                    "api_key": "API Key"
+                },
+                "data_description": {
+                    "api_key": "Your Anthropic API key from console.anthropic.com."
+                },
+                "description": "Enter your Anthropic API key to set up Claude as a conversation agent."
+            },
+            "reauth_confirm": {
+                "data": {
+                    "api_key": "API Key"
+                },
+                "description": "Your API key is no longer valid. Please enter a new one."
+            }
+        }
+    },
+    "config_subentries": {
+        "conversation": {
+            "abort": {
+                "entry_not_loaded": "Cannot configure while the integration is disabled.",
+                "reconfigure_successful": "Options updated successfully"
+            },
+            "entry_type": "Conversation agent",
+            "initiate_flow": {
+                "reconfigure": "Reconfigure conversation agent",
+                "user": "Add conversation agent"
+            },
+            "step": {
+                "init": {
+                    "data": {
+                        "name": "Name",
+                        "prompt": "System prompt",
+                        "recommended": "Use recommended settings"
+                    },
+                    "data_description": {
+                        "name": "Display name for this conversation agent.",
+                        "prompt": "Instructions for how Claude should respond. Supports Jinja2 templates.",
+                        "recommended": "Use the default model and settings."
+                    },
+                    "title": "Basic settings"
+                },
+                "advanced": {
+                    "data": {
+                        "chat_model": "Model",
+                        "max_tokens": "Maximum response tokens",
+                        "temperature": "Temperature"
+                    },
+                    "data_description": {
+                        "chat_model": "The Claude model to use for responses.",
+                        "max_tokens": "Maximum number of tokens in each response.",
+                        "temperature": "Higher values produce more creative responses."
+                    },
+                    "title": "Advanced settings"
+                },
+                "mcp": {
+                    "data": {
+                        "mcp_server_url": "MCP server URL",
+                        "mcp_server_token": "MCP server access token"
+                    },
+                    "data_description": {
+                        "mcp_server_url": "URL of the MCP server (e.g. http://localhost:8123/api/mcp for Home Assistant).",
+                        "mcp_server_token": "Long-lived access token for authenticating with the MCP server."
+                    },
+                    "title": "MCP server"
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,14 @@
+{
+    "domain": "claude_conversation_agent",
+    "name": "Claude Conversation Agent",
+    "after_dependencies": ["assist_pipeline", "intent"],
+    "codeowners": ["@nickpwhite"],
+    "config_flow": true,
+    "dependencies": ["conversation"],
+    "documentation": "https://github.com/nickpwhite/claude-ha-conversation-agent",
+    "integration_type": "service",
+    "iot_class": "cloud_polling",
+    "issue_tracker": "https://github.com/nickpwhite/claude-ha-conversation-agent/issues",
+    "requirements": ["anthropic==0.78.0", "mcp>=1.26.0"],
+    "version": "0.1.0"
+}
