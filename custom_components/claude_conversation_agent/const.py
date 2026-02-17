@@ -18,13 +18,6 @@ CONF_TEMPERATURE = "temperature"
 CONF_MCP_SERVER_URL = "mcp_server_url"
 CONF_MCP_SERVER_TOKEN = "mcp_server_token"
 
-# Model options
-RECOMMENDED_MODELS = [
-    "claude-sonnet-4-5",
-    "claude-haiku-4-5",
-    "claude-opus-4-5",
-]
-
 # Defaults
 DEFAULT_CHAT_MODEL = "claude-sonnet-4-5"
 DEFAULT_MAX_TOKENS = 1024

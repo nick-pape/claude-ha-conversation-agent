@@ -44,7 +44,6 @@ from .const import (
     DEFAULT_MAX_TOKENS,
     DEFAULT_TEMPERATURE,
     DOMAIN,
-    RECOMMENDED_MODELS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -218,9 +217,20 @@ class ConversationSubentryFlowHandler(ConfigSubentryFlow):
             self.options.update(user_input)
             return await self.async_step_mcp()
 
-        model_options = [
-            SelectOptionDict(label=m, value=m) for m in RECOMMENDED_MODELS
-        ]
+        # Fetch available models from the Anthropic API
+        client = self._get_entry().runtime_data
+        model_options: list[SelectOptionDict] = []
+        try:
+            models_page = await client.models.list(limit=1000)
+            for model in models_page.data:
+                model_options.append(
+                    SelectOptionDict(
+                        label=model.display_name, value=model.id
+                    )
+                )
+            model_options.sort(key=lambda m: m["label"])
+        except Exception:
+            _LOGGER.debug("Failed to fetch models from API", exc_info=True)
 
         step_schema = vol.Schema(
             {
