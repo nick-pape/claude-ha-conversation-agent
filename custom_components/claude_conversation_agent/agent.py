@@ -87,7 +87,6 @@ async def run_agent_loop(
     from claude_agent_sdk import (  # noqa: C0415
         ClaudeAgentOptions,
         ResultMessage,
-        StreamEvent,
         SystemMessage,
     )
     from claude_agent_sdk import query as sdk_query
@@ -151,7 +150,8 @@ async def run_agent_loop(
                     )
 
         # Extract streaming text deltas from raw API events
-        if isinstance(message, StreamEvent):
+        # StreamEvent is not in the package's __all__, so use duck typing
+        if hasattr(message, "event") and isinstance(message.event, dict):
             event = message.event
             event_type = event.get("type")
 
