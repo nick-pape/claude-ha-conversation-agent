@@ -5,8 +5,9 @@
  *   POST /api/chat       – SSE stream of agent responses
  *   GET  /api/health      – Health check
  *   GET  /api/auth/status – Current auth state
- *   POST /api/auth/login  – Initiate Max subscription login
- *   GET  /                – Ingress web UI
+ *   POST /api/auth/login     – Initiate Max subscription login (returns OAuth URL)
+ *   POST /api/auth/complete  – Complete login with OAuth authorization code
+ *   GET  /                   – Ingress web UI
  */
 
 import express from "express";
@@ -14,7 +15,7 @@ import { createReadStream } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { runAgent } from "./agent.js";
-import { getAuthStatus, initiateLogin } from "./auth.js";
+import { getAuthStatus, initiateLogin, completeLogin } from "./auth.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -43,6 +44,20 @@ app.post("/api/auth/login", async (_req, res) => {
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Complete Max login (exchange code for tokens) ────────────────────
+app.post("/api/auth/complete", async (req, res) => {
+  const { code } = req.body;
+  if (!code) {
+    return res.status(400).json({ error: "code is required" });
+  }
+  try {
+    const result = await completeLogin(code);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 

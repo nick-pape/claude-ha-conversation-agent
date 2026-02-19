@@ -59,11 +59,32 @@
       font-size: 13px;
     }
     .login-url a { color: #2563eb; }
+    .code-input {
+      margin-top: 12px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .code-input input {
+      flex: 1;
+      padding: 8px 12px;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      font-size: 14px;
+      font-family: monospace;
+    }
+    .code-input input:focus {
+      outline: none;
+      border-color: #d97706;
+      box-shadow: 0 0 0 2px rgba(217, 119, 6, 0.2);
+    }
     #message {
       margin-top: 12px;
       font-size: 13px;
       color: #666;
     }
+    #message.success { color: #16a34a; }
+    #message.error { color: #dc2626; }
   </style>
 </head>
 <body>
@@ -89,8 +110,12 @@
         <span id="max-text">Max Subscription: checking...</span>
       </div>
       <button id="login-btn" disabled>Login with Max Subscription</button>
-      <div id="login-result" style="display:none">
+      <div id="login-step2" style="display:none">
         <div class="login-url" id="login-url"></div>
+        <div class="code-input">
+          <input type="text" id="auth-code" placeholder="Paste the full URL from the address bar">
+          <button id="complete-btn">Complete Login</button>
+        </div>
       </div>
       <div id="message"></div>
     </div>
@@ -130,46 +155,122 @@
         if (data.max_authenticated) {
           mxDot.className = "dot green";
           mxText.textContent = `Max Subscription: ${data.max_email}`;
+          hideStep2();
+          showMessage(`Authenticated as ${data.max_email}`, "success");
+          return true;
         } else {
           mxDot.className = "dot gray";
           mxText.textContent = "Max Subscription: not authenticated";
         }
 
         document.getElementById("login-btn").disabled = false;
+        return false;
       } catch {
         document.getElementById("apikey-dot").className = "dot red";
         document.getElementById("apikey-text").textContent = "API Key: error checking";
         document.getElementById("max-dot").className = "dot red";
         document.getElementById("max-text").textContent = "Max Subscription: error checking";
+        return false;
       }
     }
 
+    function showMessage(text, type) {
+      const el = document.getElementById("message");
+      el.textContent = text;
+      el.className = type || "";
+    }
+
+    function hideStep2() {
+      document.getElementById("login-step2").style.display = "none";
+      document.getElementById("auth-code").value = "";
+      const btn = document.getElementById("login-btn");
+      btn.disabled = false;
+      btn.textContent = "Login with Max Subscription";
+    }
+
+    // Step 1: Click Login -> open OAuth URL in new tab, show code input
     document.getElementById("login-btn").addEventListener("click", async () => {
       const btn = document.getElementById("login-btn");
       btn.disabled = true;
       btn.textContent = "Initiating login...";
+      showMessage("");
 
       try {
         const res = await fetch(`${basePath}/api/auth/login`, { method: "POST" });
         const data = await res.json();
 
         if (data.login_url) {
-          const el = document.getElementById("login-result");
-          el.style.display = "block";
-          document.getElementById("login-url").innerHTML =
-            `Open this URL in your browser:<br><a href="${data.login_url}" target="_blank">${data.login_url}</a>`;
-        }
+          // Open OAuth URL in a new tab (anchor click bypasses iframe sandbox)
+          const a = document.createElement("a");
+          a.href = data.login_url;
+          a.target = "_blank";
+          a.rel = "noopener";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
 
-        document.getElementById("message").textContent = data.message;
+          // Show step 2: code paste
+          document.getElementById("login-step2").style.display = "block";
+          document.getElementById("login-url").innerHTML =
+            `Authorize in the opened tab. After clicking "Authorize", the page will fail to load ` +
+            `(this is expected). Copy the <strong>full URL</strong> from the address bar and paste it below.<br>` +
+            `<a href="${data.login_url}" target="_blank">Re-open auth page</a>`;
+          document.getElementById("auth-code").focus();
+
+          btn.textContent = "Waiting for code...";
+        } else {
+          showMessage(data.message, "error");
+          btn.disabled = false;
+          btn.textContent = "Login with Max Subscription";
+        }
       } catch (err) {
-        document.getElementById("message").textContent = `Error: ${err.message}`;
+        showMessage(`Error: ${err.message}`, "error");
+        btn.disabled = false;
+        btn.textContent = "Login with Max Subscription";
+      }
+    });
+
+    // Step 2: Paste code -> exchange for tokens
+    document.getElementById("complete-btn").addEventListener("click", async () => {
+      const code = document.getElementById("auth-code").value.trim();
+      if (!code) {
+        showMessage("Please paste the authorization code.", "error");
+        return;
+      }
+
+      const btn = document.getElementById("complete-btn");
+      btn.disabled = true;
+      btn.textContent = "Completing...";
+      showMessage("");
+
+      try {
+        const res = await fetch(`${basePath}/api/auth/complete`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code }),
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          showMessage(data.message, "success");
+          hideStep2();
+          await checkAuth();
+        } else {
+          showMessage(data.message, "error");
+        }
+      } catch (err) {
+        showMessage(`Error: ${err.message}`, "error");
       }
 
       btn.disabled = false;
-      btn.textContent = "Login with Max Subscription";
+      btn.textContent = "Complete Login";
+    });
 
-      // Re-check auth after a delay
-      setTimeout(checkAuth, 5000);
+    // Enter key in code input triggers complete
+    document.getElementById("auth-code").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        document.getElementById("complete-btn").click();
+      }
     });
 
     checkHealth();
