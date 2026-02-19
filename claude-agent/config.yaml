@@ -6,6 +6,7 @@ url: https://github.com/nick-pape/claude-ha-conversation-agent
 arch:
   - amd64
   - aarch64
+init: false
 homeassistant_api: true
 ingress: true
 ingress_port: 3000
