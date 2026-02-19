@@ -20,3 +20,4 @@ RUN mkdir -p /data/.claude && \
 
 # Copy s6-overlay service definition (replaces CMD)
 COPY rootfs /
+RUN chmod +x /etc/services.d/claude-agent/run
