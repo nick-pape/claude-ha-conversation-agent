@@ -19,7 +19,7 @@ import { join } from "node:path";
 import crypto from "node:crypto";
 
 const CLAUDE_CONFIG_DIR = "/data/.claude";
-const CREDENTIALS_FILE = join(CLAUDE_CONFIG_DIR, "credentials.json");
+const CREDENTIALS_FILE = join(CLAUDE_CONFIG_DIR, ".credentials.json");
 
 // OAuth constants (from the Claude Code CLI)
 const BASE_URL = "https://claude.ai";
@@ -47,9 +47,10 @@ export async function getAuthStatus() {
     try {
       const raw = readFileSync(CREDENTIALS_FILE, "utf-8");
       const creds = JSON.parse(raw);
-      if (creds.oauthAccount?.emailAddress) {
+      const oauth = creds.claudeAiOauth;
+      if (oauth?.accessToken) {
         maxAuthenticated = true;
-        maxEmail = creds.oauthAccount.emailAddress;
+        maxEmail = oauth.emailAddress || null;
       }
     } catch {
       // Credentials file exists but is invalid
@@ -173,8 +174,10 @@ export async function completeLogin(input) {
       };
     }
 
-    // Fetch the user's profile to get email and account info
-    let oauthAccount = {};
+    // Fetch the user's profile to get email and subscription info
+    let emailAddress = null;
+    let subscriptionType = null;
+    let rateLimitTier = null;
     try {
       const rolesRes = await fetch(
         "https://api.anthropic.com/api/oauth/claude_cli/roles",
@@ -182,32 +185,45 @@ export async function completeLogin(input) {
       );
       if (rolesRes.ok) {
         const roles = await rolesRes.json();
-        oauthAccount = {
-          emailAddress: roles.organization_name?.replace("'s Organization", ""),
-          organizationUuid: roles.organization_uuid,
-          organizationRole: roles.organization_role,
-          organizationName: roles.organization_name,
-        };
+        emailAddress = roles.organization_name?.replace("'s Organization", "");
+        subscriptionType = roles.subscription_type || "max";
+        rateLimitTier = roles.rate_limit_tier || "default_claude_max_20x";
       }
     } catch {
       // Profile fetch is optional — credentials still work without it
     }
 
-    // Persist credentials in the format the CLI expects
+    // Persist credentials in the format the CLI expects:
+    // File: .credentials.json (dot-prefixed)
+    // Structure: { claudeAiOauth: { accessToken, refreshToken, expiresAt (ms), ... } }
     const credentials = {
-      accessToken,
-      refreshToken,
-      expiresAt: expiresIn
-        ? new Date(Date.now() + expiresIn * 1000).toISOString()
-        : null,
-      scopes: SCOPES.split(" "),
-      oauthAccount,
+      claudeAiOauth: {
+        accessToken,
+        refreshToken,
+        expiresAt: expiresIn
+          ? Date.now() + expiresIn * 1000
+          : null,
+        scopes: SCOPES.split(" "),
+        subscriptionType: subscriptionType || "max",
+        rateLimitTier: rateLimitTier || "default_claude_max_20x",
+      },
     };
 
-    mkdirSync(CLAUDE_CONFIG_DIR, { recursive: true });
-    writeFileSync(CREDENTIALS_FILE, JSON.stringify(credentials, null, 2));
+    // Store email in the credential for status display
+    if (emailAddress) {
+      credentials.claudeAiOauth.emailAddress = emailAddress;
+    }
 
-    const email = oauthAccount.emailAddress || "unknown";
+    mkdirSync(CLAUDE_CONFIG_DIR, { recursive: true });
+    writeFileSync(CREDENTIALS_FILE, JSON.stringify(credentials));
+
+    // Also write to ~/.claude/ so the CLI can find it
+    const homeDir = process.env.HOME || "/root";
+    const homeClaude = join(homeDir, ".claude");
+    mkdirSync(homeClaude, { recursive: true });
+    writeFileSync(join(homeClaude, ".credentials.json"), JSON.stringify(credentials));
+
+    const email = emailAddress || "unknown";
     return {
       success: true,
       message: `Authenticated as ${email}`,

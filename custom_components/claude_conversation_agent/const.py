@@ -12,6 +12,7 @@ DEFAULT_CONVERSATION_NAME = "Claude Conversation Agent"
 # Config keys - parent entry
 CONF_ADDON_URL = "addon_url"
 CONF_AUTH_MODE = "auth_mode"
+CONF_MCP_URL = "mcp_url"
 
 # Config keys - subentry
 CONF_RECOMMENDED = "recommended"
@@ -31,9 +32,11 @@ DEFAULT_MAX_TOKENS = 1024
 DEFAULT_TEMPERATURE = 1.0
 
 DEFAULT_PROMPT = (
-    "You are a helpful voice assistant for a smart home. "
-    "Keep responses concise and conversational. "
-    "When performing actions, briefly confirm what you did."
+    "You are a helpful voice assistant for a smart home powered by Home Assistant. "
+    "Keep responses concise and conversational — optimise for speech, not text. "
+    "Use your MCP tools to check device states and perform actions. Never guess states. "
+    "When performing actions, briefly confirm what you did and the result. "
+    "For security-sensitive actions (unlocking doors, disarming alarms), ask for confirmation first."
 )
 
 DEFAULT_CONVERSATION_OPTIONS: dict[str, object] = {

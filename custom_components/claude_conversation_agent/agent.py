@@ -77,6 +77,7 @@ async def run_agent_loop(
     temperature: float,
     auth_mode: str = "api_key",
     api_key: str | None = None,
+    mcp_url: str = "",
 ) -> AsyncGenerator[dict[str, Any]]:
     """Call the Claude Agent add-on and yield text deltas.
 
@@ -96,6 +97,14 @@ async def run_agent_loop(
 
     if api_key:
         payload["api_key"] = api_key
+
+    if mcp_url:
+        payload["mcp_servers"] = {
+            "ha": {
+                "type": "http",
+                "url": mcp_url,
+            }
+        }
 
     if conversation_state.session_id:
         payload["session_id"] = conversation_state.session_id

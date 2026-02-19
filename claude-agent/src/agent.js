@@ -29,26 +29,11 @@ const DISALLOWED_BUILTIN_TOOLS = [
 /**
  * Build the MCP server config dict for the Agent SDK.
  *
- * Always includes the Home Assistant MCP server if SUPERVISOR_TOKEN is
- * available (add-on environment).  Also merges any user-provided MCP
- * servers from the request.
+ * MCP servers are configured by the user in the HA integration
+ * and passed per-request. The add-on does not auto-discover them.
  */
 function buildMcpServers(userMcpServers) {
-  const servers = { ...userMcpServers };
-
-  // Auto-add HA MCP server when running as an add-on
-  const supervisorToken = process.env.SUPERVISOR_TOKEN;
-  if (supervisorToken && !servers.ha) {
-    servers.ha = {
-      type: "sse",
-      url: "http://supervisor/core/api/mcp/sse",
-      headers: {
-        Authorization: `Bearer ${supervisorToken}`,
-      },
-    };
-  }
-
-  return servers;
+  return { ...userMcpServers };
 }
 
 /**
@@ -101,10 +86,10 @@ export async function runAgent({
     mcpServers,
     allowedTools,
     disallowedTools: DISALLOWED_BUILTIN_TOOLS,
-    permissionMode: "bypassPermissions",
-    allowDangerouslySkipPermissions: true,
+    permissionMode: "dontAsk",
     includePartialMessages: true,
     env,
+    stderr: (data) => console.error("[claude-cli]", data.trimEnd()),
   };
 
   // Resume previous conversation if session ID provided
