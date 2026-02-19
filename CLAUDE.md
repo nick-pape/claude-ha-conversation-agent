@@ -34,13 +34,22 @@ There is no build step, linter config, or type checker configured. The integrati
 
 ### Two-Component Design
 
-```
-HA Integration (Python)              Add-on Container (Node.js)
-  ConversationEntity                   Express server (:3000)
-    → run_agent_loop()       ─POST──▶    POST /api/chat → SSE stream
-      reads SSE stream       ◀─SSE──     Agent SDK query()
-    → ChatLog → TTS                      ↕ MCP tool calls
-                                         MCP Server (HA /api/mcp)
+```mermaid
+flowchart LR
+    subgraph HA["HA Integration (Python)"]
+        A["ConversationEntity"] --> B["run_agent_loop()"]
+        B --> C["ChatLog → TTS"]
+    end
+
+    subgraph Addon["Add-on Container (Node.js)"]
+        D["Express :3000\nPOST /api/chat"]
+        E["Agent SDK query()"]
+        F["MCP Server\n(HA /api/mcp)"]
+        D --> E
+        E <-->|tool calls| F
+    end
+
+    B -->|"POST + SSE stream"| D
 ```
 
 ### SSE Protocol (Integration ↔ Add-on)

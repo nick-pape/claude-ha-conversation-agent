@@ -22,18 +22,25 @@ Claude controls your smart home exclusively through [Model Context Protocol (MCP
 
 ## Architecture
 
-```
-+-- HA Integration (Python) ----------+     +-- Add-on Container (Node.js) ------+
-|                                      |     |                                     |
-|  ConversationEntity                  |     |  Express server (:3000)              |
-|    | user text                       |     |    POST /api/chat -> SSE stream      |
-|  run_agent_loop()                    |---->|    |                                 |
-|    POST /api/chat + read SSE stream  |     |  Agent SDK query()                  |
-|    |                                 |<----|    <-> tool calls                    |
-|  ChatLog -> TTS                      |     |  MCP Server (HA /api/mcp)           |
-|                                      |     |                                     |
-+--------------------------------------+     |  Ingress UI (auth status, login)    |
-                                             +-------------------------------------+
+```mermaid
+flowchart LR
+    subgraph HA["HA Integration (Python)"]
+        A["ConversationEntity"] --> B["run_agent_loop()"]
+        B --> C["ChatLog → TTS"]
+    end
+
+    subgraph Addon["Add-on Container (Node.js)"]
+        D["Express :3000\nPOST /api/chat"]
+        E["Agent SDK query()"]
+        F["MCP Server\n(HA /api/mcp)"]
+        D --> E
+        E <-->|tool calls| F
+    end
+
+    B -->|"POST + SSE stream"| D
+
+    style HA fill:#f0f4ff,stroke:#4a6fa5
+    style Addon fill:#f0fff4,stroke:#4a9a5a
 ```
 
 ## Prerequisites
