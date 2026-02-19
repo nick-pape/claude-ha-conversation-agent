@@ -2,22 +2,34 @@
 
 from __future__ import annotations
 
-import anthropic
+import logging
+from dataclasses import dataclass
+
+import aiohttp
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_API_KEY, Platform
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.httpx_client import get_async_client
 from homeassistant.helpers.typing import ConfigType
 
-from .const import DOMAIN, LOGGER
+from .const import CONF_ADDON_URL, DEFAULT_ADDON_URL, DOMAIN
 
-type ClaudeAgentConfigEntry = ConfigEntry[anthropic.AsyncAnthropic]
+_LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = (Platform.CONVERSATION,)
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+
+@dataclass
+class ClaudeAgentRuntimeData:
+    """Runtime data for the Claude Agent integration."""
+
+    addon_url: str
+
+
+type ClaudeAgentConfigEntry = ConfigEntry[ClaudeAgentRuntimeData]
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -29,19 +41,30 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ClaudeAgentConfigEntry
 ) -> bool:
     """Set up Claude Conversation Agent from a config entry."""
-    client = anthropic.AsyncAnthropic(
-        api_key=entry.data[CONF_API_KEY],
-        http_client=get_async_client(hass),
-    )
+    addon_url = entry.data.get(CONF_ADDON_URL, DEFAULT_ADDON_URL)
 
+    # Health-check the add-on
     try:
-        await client.models.list(timeout=10.0)
-    except anthropic.AuthenticationError as err:
-        raise ConfigEntryAuthFailed(err) from err
-    except anthropic.AnthropicError as err:
-        raise ConfigEntryNotReady(err) from err
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{addon_url}/api/health",
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status != 200:
+                    raise ConfigEntryNotReady(
+                        f"Add-on health check failed: HTTP {resp.status}"
+                    )
+                data = await resp.json()
+                if data.get("status") != "ok":
+                    raise ConfigEntryNotReady(
+                        f"Add-on not healthy: {data}"
+                    )
+    except aiohttp.ClientError as err:
+        raise ConfigEntryNotReady(
+            f"Cannot connect to Claude Agent add-on at {addon_url}: {err}"
+        ) from err
 
-    entry.runtime_data = client
+    entry.runtime_data = ClaudeAgentRuntimeData(addon_url=addon_url)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 

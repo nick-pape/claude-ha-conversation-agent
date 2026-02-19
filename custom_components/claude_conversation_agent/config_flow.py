@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import anthropic
+import aiohttp
 import voluptuous as vol
 
 from homeassistant.config_entries import (
@@ -17,7 +17,6 @@ from homeassistant.config_entries import (
 )
 from homeassistant.const import CONF_API_KEY, CONF_NAME
 from homeassistant.core import callback
-from homeassistant.helpers.httpx_client import get_async_client
 from homeassistant.helpers.selector import (
     NumberSelector,
     NumberSelectorConfig,
@@ -31,13 +30,16 @@ from homeassistant.helpers.selector import (
 )
 
 from .const import (
+    AUTH_MODE_API_KEY,
+    AUTH_MODE_MAX,
+    CONF_ADDON_URL,
+    CONF_AUTH_MODE,
     CONF_CHAT_MODEL,
     CONF_MAX_TOKENS,
-    CONF_MCP_SERVER_TOKEN,
-    CONF_MCP_SERVER_URL,
     CONF_PROMPT,
     CONF_RECOMMENDED,
     CONF_TEMPERATURE,
+    DEFAULT_ADDON_URL,
     DEFAULT_CHAT_MODEL,
     DEFAULT_CONVERSATION_NAME,
     DEFAULT_CONVERSATION_OPTIONS,
@@ -48,80 +50,131 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-STEP_USER_DATA_SCHEMA = vol.Schema(
-    {
-        vol.Required(CONF_API_KEY): TextSelector(
-            TextSelectorConfig(type=TextSelectorType.PASSWORD)
-        ),
-    }
-)
-
-
-async def _validate_api_key(
-    hass: Any, api_key: str
-) -> None:
-    """Validate the API key by listing models."""
-    client = anthropic.AsyncAnthropic(
-        api_key=api_key,
-        http_client=get_async_client(hass),
-    )
-    await client.models.list(timeout=10.0)
-
 
 class ClaudeConversationAgentConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Claude Conversation Agent."""
 
     VERSION = 1
-    MINOR_VERSION = 1
+    MINOR_VERSION = 2
+
+    _addon_url: str = DEFAULT_ADDON_URL
+
+    async def async_step_hassio(
+        self, discovery_info: dict[str, Any]
+    ) -> ConfigFlowResult:
+        """Handle Supervisor add-on discovery."""
+        await self.async_set_unique_id("claude_agent")
+        self._abort_if_unique_id_configured()
+        self._addon_url = f"http://{discovery_info.get('host', '2af94f27-claude-agent')}:{discovery_info.get('port', 3000)}"
+        return await self.async_step_auth()
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Handle the initial API key step."""
+        """Handle manual setup — ask for add-on URL."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            self._async_abort_entries_match(user_input)
+            self._addon_url = user_input.get(CONF_ADDON_URL, DEFAULT_ADDON_URL)
+
+            # Verify add-on is reachable
             try:
-                await _validate_api_key(self.hass, user_input[CONF_API_KEY])
-            except anthropic.APITimeoutError:
-                errors["base"] = "timeout_connect"
-            except anthropic.APIConnectionError:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        f"{self._addon_url}/api/health",
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    ) as resp:
+                        if resp.status != 200:
+                            errors["base"] = "cannot_connect"
+                        else:
+                            data = await resp.json()
+                            if data.get("status") != "ok":
+                                errors["base"] = "cannot_connect"
+            except aiohttp.ClientError:
                 errors["base"] = "cannot_connect"
-            except anthropic.APIStatusError as err:
-                if (
-                    isinstance(err.body, dict)
-                    and isinstance(err.body.get("error"), dict)
-                    and err.body["error"].get("type") == "authentication_error"
-                ):
-                    errors["base"] = "authentication_error"
-                else:
-                    errors["base"] = "unknown"
             except Exception:
-                _LOGGER.exception("Unexpected exception during setup")
+                _LOGGER.exception("Unexpected error connecting to add-on")
                 errors["base"] = "unknown"
-            else:
-                if self.source == "reauth":
-                    return self.async_update_reload_and_abort(
-                        self._get_reauth_entry(), data_updates=user_input
-                    )
-                return self.async_create_entry(
-                    title="Claude",
-                    data=user_input,
-                    subentries=[
-                        {
-                            "subentry_type": "conversation",
-                            "data": DEFAULT_CONVERSATION_OPTIONS,
-                            "title": DEFAULT_CONVERSATION_NAME,
-                            "unique_id": None,
-                        },
-                    ],
-                )
+
+            if not errors:
+                return await self.async_step_auth()
 
         return self.async_show_form(
             step_id="user",
-            data_schema=STEP_USER_DATA_SCHEMA,
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_ADDON_URL, default=DEFAULT_ADDON_URL
+                    ): TextSelector(
+                        TextSelectorConfig(type=TextSelectorType.URL)
+                    ),
+                }
+            ),
             errors=errors or None,
+        )
+
+    async def async_step_auth(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Choose authentication mode."""
+        if user_input is not None:
+            auth_mode = user_input.get(CONF_AUTH_MODE, AUTH_MODE_API_KEY)
+            entry_data: dict[str, Any] = {
+                CONF_ADDON_URL: self._addon_url,
+                CONF_AUTH_MODE: auth_mode,
+            }
+
+            if auth_mode == AUTH_MODE_API_KEY:
+                api_key = user_input.get(CONF_API_KEY, "")
+                if not api_key:
+                    return self.async_show_form(
+                        step_id="auth",
+                        data_schema=self._auth_schema(),
+                        errors={"base": "authentication_error"},
+                    )
+                entry_data[CONF_API_KEY] = api_key
+
+            return self.async_create_entry(
+                title="Claude",
+                data=entry_data,
+                subentries=[
+                    {
+                        "subentry_type": "conversation",
+                        "data": DEFAULT_CONVERSATION_OPTIONS,
+                        "title": DEFAULT_CONVERSATION_NAME,
+                        "unique_id": None,
+                    },
+                ],
+            )
+
+        return self.async_show_form(
+            step_id="auth",
+            data_schema=self._auth_schema(),
+        )
+
+    def _auth_schema(self) -> vol.Schema:
+        """Build the auth step schema."""
+        return vol.Schema(
+            {
+                vol.Required(
+                    CONF_AUTH_MODE, default=AUTH_MODE_API_KEY
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[
+                            SelectOptionDict(
+                                label="API Key", value=AUTH_MODE_API_KEY
+                            ),
+                            SelectOptionDict(
+                                label="Max Subscription", value=AUTH_MODE_MAX
+                            ),
+                        ],
+                        mode="dropdown",
+                    )
+                ),
+                vol.Optional(CONF_API_KEY): TextSelector(
+                    TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                ),
+            }
         )
 
     async def async_step_reauth(
@@ -135,11 +188,20 @@ class ClaudeConversationAgentConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Confirm reauth dialog."""
         if user_input is not None:
-            return await self.async_step_user(user_input)
+            return self.async_update_reload_and_abort(
+                self._get_reauth_entry(),
+                data_updates={CONF_API_KEY: user_input[CONF_API_KEY]},
+            )
 
         return self.async_show_form(
             step_id="reauth_confirm",
-            data_schema=STEP_USER_DATA_SCHEMA,
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_API_KEY): TextSelector(
+                        TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                    ),
+                }
+            ),
         )
 
     @classmethod
@@ -183,7 +245,7 @@ class ConversationSubentryFlowHandler(ConfigSubentryFlow):
         if user_input is not None:
             self.options.update(user_input)
             if user_input.get(CONF_RECOMMENDED, True):
-                return await self.async_step_mcp()
+                return self._create_or_update()
             return await self.async_step_advanced()
 
         step_schema: dict[Any, Any] = {}
@@ -215,22 +277,7 @@ class ConversationSubentryFlowHandler(ConfigSubentryFlow):
         """Advanced settings: model, max tokens, temperature."""
         if user_input is not None:
             self.options.update(user_input)
-            return await self.async_step_mcp()
-
-        # Fetch available models from the Anthropic API
-        client = self._get_entry().runtime_data
-        model_options: list[SelectOptionDict] = []
-        try:
-            models_page = await client.models.list(limit=1000)
-            for model in models_page.data:
-                model_options.append(
-                    SelectOptionDict(
-                        label=model.display_name, value=model.id
-                    )
-                )
-            model_options.sort(key=lambda m: m["label"])
-        except Exception:
-            _LOGGER.debug("Failed to fetch models from API", exc_info=True)
+            return self._create_or_update()
 
         step_schema = vol.Schema(
             {
@@ -241,7 +288,20 @@ class ConversationSubentryFlowHandler(ConfigSubentryFlow):
                     ),
                 ): SelectSelector(
                     SelectSelectorConfig(
-                        options=model_options,
+                        options=[
+                            SelectOptionDict(
+                                label="Claude Sonnet 4.5",
+                                value="claude-sonnet-4-5",
+                            ),
+                            SelectOptionDict(
+                                label="Claude Opus 4.6",
+                                value="claude-opus-4-6",
+                            ),
+                            SelectOptionDict(
+                                label="Claude Haiku 4.5",
+                                value="claude-haiku-4-5",
+                            ),
+                        ],
                         custom_value=True,
                     )
                 ),
@@ -271,45 +331,19 @@ class ConversationSubentryFlowHandler(ConfigSubentryFlow):
             data_schema=self.add_suggested_values_to_schema(
                 step_schema, self.options
             ),
+            last_step=True,
         )
 
-    async def async_step_mcp(
-        self, user_input: dict[str, Any] | None = None
-    ) -> SubentryFlowResult:
-        """MCP server settings."""
-        if user_input is not None:
-            self.options.update(user_input)
-            if self._is_new:
-                name = self.options.pop(CONF_NAME, DEFAULT_CONVERSATION_NAME)
-                return self.async_create_entry(
-                    title=name,
-                    data=self.options,
-                )
-            return self.async_update_and_abort(
-                self._get_entry(),
-                self._get_reconfigure_subentry(),
+    def _create_or_update(self) -> SubentryFlowResult:
+        """Create new subentry or update existing one."""
+        if self._is_new:
+            name = self.options.pop(CONF_NAME, DEFAULT_CONVERSATION_NAME)
+            return self.async_create_entry(
+                title=name,
                 data=self.options,
             )
-
-        step_schema = vol.Schema(
-            {
-                vol.Optional(
-                    CONF_MCP_SERVER_URL,
-                    default=self.options.get(CONF_MCP_SERVER_URL, ""),
-                ): TextSelector(TextSelectorConfig(type=TextSelectorType.URL)),
-                vol.Optional(
-                    CONF_MCP_SERVER_TOKEN,
-                    default=self.options.get(CONF_MCP_SERVER_TOKEN, ""),
-                ): TextSelector(
-                    TextSelectorConfig(type=TextSelectorType.PASSWORD)
-                ),
-            }
-        )
-
-        return self.async_show_form(
-            step_id="mcp",
-            data_schema=self.add_suggested_values_to_schema(
-                step_schema, self.options
-            ),
-            last_step=True,
+        return self.async_update_and_abort(
+            self._get_entry(),
+            self._get_reconfigure_subentry(),
+            data=self.options,
         )

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import importlib
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -106,73 +106,13 @@ def _install_ha_stubs() -> None:  # noqa: C901
     ha_conv.async_get_result_from_chat_log = MagicMock()  # type: ignore[attr-defined]
 
 
-def _install_claude_agent_sdk_stubs() -> None:
-    """Create stub for claude_agent_sdk so tests don't need the real package."""
-
-    sdk = _make_module("claude_agent_sdk")
-
-    # --- Message types as simple dataclasses ---
-
-    @dataclass
-    class SystemMessage:
-        subtype: str = ""
-        data: dict[str, Any] = field(default_factory=dict)
-        session_id: str = ""
-
-    @dataclass
-    class AssistantMessage:
-        content: list[Any] = field(default_factory=list)
-        model: str = ""
-
-    @dataclass
-    class ResultMessage:
-        subtype: str = ""
-        duration_ms: int = 0
-        duration_api_ms: int = 0
-        is_error: bool = False
-        num_turns: int = 0
-        session_id: str = ""
-        total_cost_usd: float | None = None
-        usage: dict[str, Any] | None = None
-        result: str | None = None
-
-    @dataclass
-    class StreamEvent:
-        uuid: str = ""
-        session_id: str = ""
-        event: dict[str, Any] = field(default_factory=dict)
-        parent_tool_use_id: str | None = None
-
-    @dataclass
-    class ClaudeAgentOptions:
-        system_prompt: str | None = None
-        model: str | None = None
-        max_turns: int | None = None
-        mcp_servers: dict[str, Any] = field(default_factory=dict)
-        allowed_tools: list[str] = field(default_factory=list)
-        permission_mode: str | None = None
-        include_partial_messages: bool = False
-        env: dict[str, str] = field(default_factory=dict)
-        resume: str | None = None
-
-    # Assign to module
-    sdk.SystemMessage = SystemMessage  # type: ignore[attr-defined]
-    sdk.AssistantMessage = AssistantMessage  # type: ignore[attr-defined]
-    sdk.ResultMessage = ResultMessage  # type: ignore[attr-defined]
-    sdk.StreamEvent = StreamEvent  # type: ignore[attr-defined]
-    sdk.ClaudeAgentOptions = ClaudeAgentOptions  # type: ignore[attr-defined]
-
-    # query is a placeholder — tests patch it per-test
-    sdk.query = MagicMock()  # type: ignore[attr-defined]
-
-
 def _install_integration_package_stubs() -> None:
     """Pre-register the custom_components package hierarchy.
 
     The real ``__init__.py`` uses Python 3.12+ ``type`` statement syntax,
     so we install a lightweight stub in sys.modules to prevent the real
-    file from being parsed.  Sub-modules (const, agent, mcp_manager) are
-    then imported normally via importlib.
+    file from being parsed.  Sub-modules (const, agent) are then imported
+    normally via importlib.
     """
     # Package: custom_components
     cc = _make_module("custom_components", package="custom_components")
@@ -193,52 +133,19 @@ def _install_integration_package_stubs() -> None:
     # Provide the ClaudeAgentConfigEntry attribute that other modules expect
     pkg.ClaudeAgentConfigEntry = MagicMock  # type: ignore[attr-defined]
 
-    # Now import the real sub-modules using importlib (they only depend on
-    # .const and .mcp_manager, not on __init__).
+    # Now import the real sub-modules using importlib
     importlib.import_module("custom_components.claude_conversation_agent.const")
-    importlib.import_module("custom_components.claude_conversation_agent.mcp_manager")
     importlib.import_module("custom_components.claude_conversation_agent.agent")
 
 
 # Install stubs at import time - before any test file is collected.
 _install_ha_stubs()
-_install_claude_agent_sdk_stubs()
 _install_integration_package_stubs()
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-@pytest.fixture
-def mock_anthropic_client() -> AsyncMock:
-    """Return a mocked anthropic.AsyncAnthropic client.
-
-    The client exposes ``messages.stream()`` as an async context manager
-    that yields a mock stream object.
-    """
-    client = AsyncMock(spec_set=["messages", "models"])
-    client.messages = AsyncMock()
-    client.models = AsyncMock()
-    return client
-
-
-@pytest.fixture
-def mock_mcp_session() -> AsyncMock:
-    """Return a mocked ``mcp.ClientSession`` with list_tools / call_tool."""
-    session = AsyncMock()
-    session.initialize = AsyncMock()
-    session.list_tools = AsyncMock()
-    session.call_tool = AsyncMock()
-    return session
-
-
-@pytest.fixture
-def mcp_manager():
-    """Return a fresh MCPManager instance."""
-    from custom_components.claude_conversation_agent.mcp_manager import MCPManager
-    return MCPManager()
-
 
 @pytest.fixture
 def conversation_state():

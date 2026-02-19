@@ -15,10 +15,10 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from . import ClaudeAgentConfigEntry
 from .agent import ConversationStateManager, run_agent_loop
 from .const import (
+    AUTH_MODE_API_KEY,
+    CONF_AUTH_MODE,
     CONF_CHAT_MODEL,
     CONF_MAX_TOKENS,
-    CONF_MCP_SERVER_TOKEN,
-    CONF_MCP_SERVER_URL,
     CONF_PROMPT,
     CONF_TEMPERATURE,
     CONVERSATION_STATE_TTL,
@@ -54,8 +54,8 @@ class ClaudeConversationEntity(
 ):
     """Claude conversation agent entity.
 
-    Uses the Claude Agent SDK for automatic tool calling via MCP.
-    The SDK handles MCP connections, tool discovery, and the agent loop.
+    Communicates with the Claude Agent add-on over HTTP+SSE.
+    The add-on handles MCP connections, tool discovery, and the agent loop.
     """
 
     _attr_supports_streaming = True
@@ -107,14 +107,17 @@ class ClaudeConversationEntity(
         # 3. Get system prompt from chat_log
         system_prompt = chat_log.content[0].content
 
-        # 4. Run agent loop through chat_log's streaming interface
+        # 4. Get add-on URL and auth config from entry
+        addon_url = self.entry.runtime_data.addon_url
+        auth_mode = self.entry.data.get(CONF_AUTH_MODE, AUTH_MODE_API_KEY)
+        api_key = self.entry.data.get(CONF_API_KEY)
+
+        # 5. Run agent loop through chat_log's streaming interface
         try:
             async for _ in chat_log.async_add_delta_content_stream(
                 self.entity_id,
                 run_agent_loop(
-                    api_key=self.entry.data[CONF_API_KEY],
-                    mcp_server_url=options.get(CONF_MCP_SERVER_URL),
-                    mcp_server_token=options.get(CONF_MCP_SERVER_TOKEN),
+                    addon_url=addon_url,
                     system_prompt=system_prompt,
                     user_text=user_input.text,
                     conversation_state=state,
@@ -123,6 +126,8 @@ class ClaudeConversationEntity(
                     temperature=options.get(
                         CONF_TEMPERATURE, DEFAULT_TEMPERATURE
                     ),
+                    auth_mode=auth_mode,
+                    api_key=api_key,
                 ),
             ):
                 pass
@@ -131,8 +136,8 @@ class ClaudeConversationEntity(
         except Exception as err:
             _LOGGER.exception("Error in agent loop")
             raise HomeAssistantError(
-                f"Error communicating with Claude: {err}"
+                f"Error communicating with Claude Agent add-on: {err}"
             ) from err
 
-        # 5. Return result from chat_log
+        # 6. Return result from chat_log
         return conversation.async_get_result_from_chat_log(user_input, chat_log)

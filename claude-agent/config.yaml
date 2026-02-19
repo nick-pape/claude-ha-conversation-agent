@@ -1,0 +1,25 @@
+name: Claude Agent
+description: Claude conversation agent powered by Claude Agent SDK with MCP support
+version: 0.1.0
+slug: claude_agent
+url: https://github.com/nick-pape/claude-ha-conversation-agent
+arch:
+  - amd64
+  - aarch64
+homeassistant_api: true
+ingress: true
+ingress_port: 3000
+panel_icon: mdi:robot
+panel_title: Claude Agent
+discovery:
+  - claude_agent
+ports:
+  3000/tcp: null
+ports_description:
+  3000/tcp: Claude Agent HTTP API (internal only)
+map:
+  - addon_config:rw
+options:
+  auth_mode: api_key
+schema:
+  auth_mode: str

@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Agent</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f5f5f5;
+      color: #333;
+      padding: 24px;
+    }
+    .container { max-width: 600px; margin: 0 auto; }
+    h1 { font-size: 24px; margin-bottom: 24px; }
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .card h2 { font-size: 16px; margin-bottom: 12px; color: #666; }
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      margin-bottom: 8px;
+    }
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .dot.green { background: #22c55e; }
+    .dot.red { background: #ef4444; }
+    .dot.gray { background: #9ca3af; }
+    button {
+      background: #d97706;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 20px;
+      font-size: 14px;
+      cursor: pointer;
+      margin-top: 12px;
+    }
+    button:hover { background: #b45309; }
+    button:disabled { background: #9ca3af; cursor: not-allowed; }
+    .login-url {
+      margin-top: 12px;
+      padding: 12px;
+      background: #f9fafb;
+      border-radius: 8px;
+      word-break: break-all;
+      font-size: 13px;
+    }
+    .login-url a { color: #2563eb; }
+    #message {
+      margin-top: 12px;
+      font-size: 13px;
+      color: #666;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Claude Agent</h1>
+
+    <div class="card">
+      <h2>Service Status</h2>
+      <div class="status">
+        <span class="dot" id="health-dot"></span>
+        <span id="health-text">Checking...</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Authentication</h2>
+      <div class="status">
+        <span class="dot" id="apikey-dot"></span>
+        <span id="apikey-text">API Key: checking...</span>
+      </div>
+      <div class="status">
+        <span class="dot" id="max-dot"></span>
+        <span id="max-text">Max Subscription: checking...</span>
+      </div>
+      <button id="login-btn" disabled>Login with Max Subscription</button>
+      <div id="login-result" style="display:none">
+        <div class="login-url" id="login-url"></div>
+      </div>
+      <div id="message"></div>
+    </div>
+  </div>
+
+  <script>
+    const basePath = window.location.pathname.replace(/\/$/, "");
+
+    async function checkHealth() {
+      try {
+        const res = await fetch(`${basePath}/api/health`);
+        const data = await res.json();
+        document.getElementById("health-dot").className = "dot green";
+        document.getElementById("health-text").textContent = "Service running";
+      } catch {
+        document.getElementById("health-dot").className = "dot red";
+        document.getElementById("health-text").textContent = "Service unavailable";
+      }
+    }
+
+    async function checkAuth() {
+      try {
+        const res = await fetch(`${basePath}/api/auth/status`);
+        const data = await res.json();
+
+        // API Key
+        const akDot = document.getElementById("apikey-dot");
+        const akText = document.getElementById("apikey-text");
+        akDot.className = data.api_key_available ? "dot green" : "dot gray";
+        akText.textContent = data.api_key_available
+          ? "API Key: configured (set per-request from HA)"
+          : "API Key: not set in environment (provided per-request)";
+
+        // Max
+        const mxDot = document.getElementById("max-dot");
+        const mxText = document.getElementById("max-text");
+        if (data.max_authenticated) {
+          mxDot.className = "dot green";
+          mxText.textContent = `Max Subscription: ${data.max_email}`;
+        } else {
+          mxDot.className = "dot gray";
+          mxText.textContent = "Max Subscription: not authenticated";
+        }
+
+        document.getElementById("login-btn").disabled = false;
+      } catch {
+        document.getElementById("apikey-dot").className = "dot red";
+        document.getElementById("apikey-text").textContent = "API Key: error checking";
+        document.getElementById("max-dot").className = "dot red";
+        document.getElementById("max-text").textContent = "Max Subscription: error checking";
+      }
+    }
+
+    document.getElementById("login-btn").addEventListener("click", async () => {
+      const btn = document.getElementById("login-btn");
+      btn.disabled = true;
+      btn.textContent = "Initiating login...";
+
+      try {
+        const res = await fetch(`${basePath}/api/auth/login`, { method: "POST" });
+        const data = await res.json();
+
+        if (data.login_url) {
+          const el = document.getElementById("login-result");
+          el.style.display = "block";
+          document.getElementById("login-url").innerHTML =
+            `Open this URL in your browser:<br><a href="${data.login_url}" target="_blank">${data.login_url}</a>`;
+        }
+
+        document.getElementById("message").textContent = data.message;
+      } catch (err) {
+        document.getElementById("message").textContent = `Error: ${err.message}`;
+      }
+
+      btn.disabled = false;
+      btn.textContent = "Login with Max Subscription";
+
+      // Re-check auth after a delay
+      setTimeout(checkAuth, 5000);
+    });
+
+    checkHealth();
+    checkAuth();
+  </script>
+</body>
+</html>

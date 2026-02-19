@@ -1,14 +1,14 @@
 """Tests for agent.py – ConversationStateManager and run_agent_loop.
 
-The agent loop now uses the Claude Agent SDK (claude_agent_sdk.query).
-Tests mock the SDK's query() function and verify that streaming text
-deltas are correctly extracted from StreamEvent messages.
+The agent loop now communicates with the Claude Agent add-on over HTTP+SSE.
+Tests mock aiohttp.ClientSession to return fake SSE streams.
 """
 
 from __future__ import annotations
 
+import json
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio  # noqa: F401 – enables async tests
@@ -18,7 +18,6 @@ from custom_components.claude_conversation_agent.agent import (
     ConversationStateManager,
     run_agent_loop,
 )
-from custom_components.claude_conversation_agent.const import MAX_TOOL_ITERATIONS
 
 
 # ===================================================================
@@ -130,118 +129,93 @@ class TestConversationStateManager:
 # ===================================================================
 
 
-def _make_init_message(session_id: str = "test-session", mcp_servers: list | None = None):
-    """Create a SystemMessage(subtype='init') from the Agent SDK."""
-    from claude_agent_sdk import SystemMessage
-    return SystemMessage(
-        subtype="init",
-        data={"mcp_servers": mcp_servers or [], "session_id": session_id},
-        session_id=session_id,
-    )
+def _sse_line(data: dict[str, Any]) -> bytes:
+    """Encode a dict as an SSE data line."""
+    return f"data: {json.dumps(data)}\n\n".encode("utf-8")
 
 
-def _make_result_message(
-    session_id: str = "test-session",
-    num_turns: int = 1,
-    is_error: bool = False,
-    result: str | None = None,
-):
-    """Create a ResultMessage from the Agent SDK."""
-    from claude_agent_sdk import ResultMessage
-    return ResultMessage(
-        subtype="success" if not is_error else "error",
-        duration_ms=100,
-        duration_api_ms=80,
-        is_error=is_error,
-        num_turns=num_turns,
-        session_id=session_id,
-        total_cost_usd=0.001,
-        result=result,
-    )
+class FakeSSEContent:
+    """Async iterable that yields SSE lines, mimicking aiohttp response.content."""
+
+    def __init__(self, events: list[dict[str, Any]]) -> None:
+        self._lines = [_sse_line(e) for e in events]
+
+    def __aiter__(self):
+        return self._async_gen()
+
+    async def _async_gen(self):
+        for line in self._lines:
+            yield line
 
 
-def _make_stream_event(event: dict[str, Any], session_id: str = "test-session"):
-    """Create a StreamEvent wrapping a raw API event."""
-    from claude_agent_sdk import StreamEvent
-    return StreamEvent(
-        uuid="evt-1",
-        session_id=session_id,
-        event=event,
-    )
+def _mock_session_for_events(events: list[dict[str, Any]], captured: dict | None = None):
+    """Create a mock aiohttp.ClientSession that returns the given SSE events.
+
+    If `captured` is provided, the request payload will be stored in it.
+    """
+    # Build response mock with real async iterable content
+    response = MagicMock()
+    response.status = 200
+    response.content = FakeSSEContent(events)
+    response.text = AsyncMock(return_value="")
+
+    # Build the async context manager for post()
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=response)
+    cm.__aexit__ = AsyncMock(return_value=False)
+
+    if captured is not None:
+        def capturing_post(url, **kwargs):
+            captured["url"] = url
+            captured["json"] = kwargs.get("json", {})
+            return cm
+
+        post_fn = MagicMock(side_effect=capturing_post)
+    else:
+        post_fn = MagicMock(return_value=cm)
+
+    session_mock = MagicMock()
+    session_mock.post = post_fn
+    session_mock.__aenter__ = AsyncMock(return_value=session_mock)
+    session_mock.__aexit__ = AsyncMock(return_value=False)
+
+    return session_mock
 
 
-def _text_block_start_event(session_id: str = "test-session"):
-    """StreamEvent for content_block_start with type=text."""
-    return _make_stream_event(
-        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
-        session_id,
-    )
-
-
-def _text_delta_event(text: str, session_id: str = "test-session"):
-    """StreamEvent for content_block_delta with text_delta."""
-    return _make_stream_event(
-        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
-        session_id,
-    )
-
-
-def _tool_use_block_start_event(session_id: str = "test-session"):
-    """StreamEvent for content_block_start with type=tool_use (should NOT yield text)."""
-    return _make_stream_event(
-        {"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "id": "tu_1", "name": "ha__test"}},
-        session_id,
-    )
-
-
-def _input_json_delta_event(session_id: str = "test-session"):
-    """StreamEvent for content_block_delta with input_json_delta (should NOT yield text)."""
-    return _make_stream_event(
-        {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": "{}"}},
-        session_id,
-    )
-
-
-async def _fake_query_from_messages(messages: list):
-    """Create an async generator from a list of SDK messages."""
-    for msg in messages:
-        yield msg
+# Default args shared across tests
+_DEFAULT_LOOP_ARGS: dict[str, Any] = {
+    "addon_url": "http://localhost:3000",
+    "system_prompt": "You are helpful.",
+    "user_text": "Hi",
+    "model": "claude-sonnet-4-5",
+    "max_tokens": 1024,
+    "temperature": 1.0,
+    "auth_mode": "api_key",
+    "api_key": "test-api-key",
+}
 
 
 # ===================================================================
 # run_agent_loop tests
 # ===================================================================
 
-# Default args shared across tests
-_DEFAULT_LOOP_ARGS: dict[str, Any] = {
-    "api_key": "test-api-key",
-    "mcp_server_url": None,
-    "mcp_server_token": None,
-    "system_prompt": "You are helpful.",
-    "user_text": "Hi",
-    "model": "claude-sonnet-4-5",
-    "max_tokens": 1024,
-    "temperature": 1.0,
-}
-
 
 class TestRunAgentLoopSimpleText:
-    """Claude responds with plain text (no tool use)."""
+    """Add-on responds with plain text (no tool use)."""
 
     @pytest.mark.asyncio
     async def test_yields_role_then_content(self, conversation_state):
-        messages = [
-            _make_init_message(),
-            _text_block_start_event(),
-            _text_delta_event("Hello "),
-            _text_delta_event("there!"),
-            _make_result_message(),
+        events = [
+            {"type": "init", "session_id": "test-session", "mcp_servers": []},
+            {"type": "role", "role": "assistant"},
+            {"type": "delta", "content": "Hello "},
+            {"type": "delta", "content": "there!"},
+            {"type": "result", "session_id": "test-session", "is_error": False},
         ]
 
-        with patch(
-            "claude_agent_sdk.query",
-            return_value=_fake_query_from_messages(messages),
-        ):
+        session_mock = _mock_session_for_events(events)
+
+        with patch("aiohttp.ClientSession", return_value=session_mock):
             collected: list[dict] = []
             async for delta in run_agent_loop(
                 **_DEFAULT_LOOP_ARGS,
@@ -257,17 +231,16 @@ class TestRunAgentLoopSimpleText:
 
     @pytest.mark.asyncio
     async def test_session_id_stored_in_state(self, conversation_state):
-        messages = [
-            _make_init_message(session_id="session-xyz"),
-            _text_block_start_event(session_id="session-xyz"),
-            _text_delta_event("Hi", session_id="session-xyz"),
-            _make_result_message(session_id="session-xyz"),
+        events = [
+            {"type": "init", "session_id": "session-xyz", "mcp_servers": []},
+            {"type": "role", "role": "assistant"},
+            {"type": "delta", "content": "Hi"},
+            {"type": "result", "session_id": "session-xyz", "is_error": False},
         ]
 
-        with patch(
-            "claude_agent_sdk.query",
-            return_value=_fake_query_from_messages(messages),
-        ):
+        session_mock = _mock_session_for_events(events)
+
+        with patch("aiohttp.ClientSession", return_value=session_mock):
             async for _ in run_agent_loop(
                 **_DEFAULT_LOOP_ARGS,
                 conversation_state=conversation_state,
@@ -277,174 +250,49 @@ class TestRunAgentLoopSimpleText:
         assert conversation_state.session_id == "session-xyz"
 
     @pytest.mark.asyncio
-    async def test_resume_passed_when_session_exists(self, conversation_state):
-        """When conversation_state has a session_id, options.resume should be set."""
+    async def test_resume_session_id_sent_in_payload(self, conversation_state):
+        """When conversation_state has a session_id, it should be sent in the request."""
         conversation_state.session_id = "prev-session"
 
-        messages = [
-            _make_init_message(session_id="new-session"),
-            _text_block_start_event(),
-            _text_delta_event("Continued"),
-            _make_result_message(session_id="new-session"),
+        events = [
+            {"type": "init", "session_id": "new-session", "mcp_servers": []},
+            {"type": "role", "role": "assistant"},
+            {"type": "delta", "content": "Continued"},
+            {"type": "result", "session_id": "new-session", "is_error": False},
         ]
 
-        captured_options = {}
+        captured: dict[str, Any] = {}
+        session_mock = _mock_session_for_events(events, captured=captured)
 
-        async def capturing_query(prompt, options=None):
-            captured_options["resume"] = options.resume if options else None
-            async for msg in _fake_query_from_messages(messages):
-                yield msg
-
-        with patch(
-            "claude_agent_sdk.query",
-            side_effect=capturing_query,
-        ):
+        with patch("aiohttp.ClientSession", return_value=session_mock):
             async for _ in run_agent_loop(
                 **_DEFAULT_LOOP_ARGS,
                 conversation_state=conversation_state,
             ):
                 pass
 
-        assert captured_options["resume"] == "prev-session"
+        assert captured["json"]["session_id"] == "prev-session"
         # session_id updated to new session
         assert conversation_state.session_id == "new-session"
-
-
-class TestRunAgentLoopMCPConfig:
-    """Verify MCP server configuration is passed correctly to the SDK."""
-
-    @pytest.mark.asyncio
-    async def test_mcp_server_configured(self, conversation_state):
-        messages = [
-            _make_init_message(),
-            _text_block_start_event(),
-            _text_delta_event("ok"),
-            _make_result_message(),
-        ]
-
-        captured_options = {}
-
-        async def capturing_query(prompt, options=None):
-            captured_options["mcp_servers"] = options.mcp_servers if options else {}
-            captured_options["allowed_tools"] = options.allowed_tools if options else []
-            async for msg in _fake_query_from_messages(messages):
-                yield msg
-
-        with patch(
-            "claude_agent_sdk.query",
-            side_effect=capturing_query,
-        ):
-            async for _ in run_agent_loop(
-                api_key="test-key",
-                mcp_server_url="http://localhost:8123/mcp",
-                mcp_server_token="secret-token",
-                system_prompt="sys",
-                user_text="Hi",
-                conversation_state=conversation_state,
-                model="claude-sonnet-4-5",
-                max_tokens=1024,
-                temperature=1.0,
-            ):
-                pass
-
-        # MCP server should be configured as SSE with auth header
-        assert "ha" in captured_options["mcp_servers"]
-        ha_config = captured_options["mcp_servers"]["ha"]
-        assert ha_config["type"] == "sse"
-        assert ha_config["url"] == "http://localhost:8123/mcp"
-        assert ha_config["headers"]["Authorization"] == "Bearer secret-token"
-
-        # Allowed tools should include wildcard for HA MCP
-        assert captured_options["allowed_tools"] == ["mcp__ha__*"]
-
-    @pytest.mark.asyncio
-    async def test_no_mcp_when_url_not_set(self, conversation_state):
-        messages = [
-            _make_init_message(),
-            _text_block_start_event(),
-            _text_delta_event("ok"),
-            _make_result_message(),
-        ]
-
-        captured_options = {}
-
-        async def capturing_query(prompt, options=None):
-            captured_options["mcp_servers"] = options.mcp_servers if options else {}
-            captured_options["allowed_tools"] = options.allowed_tools if options else []
-            async for msg in _fake_query_from_messages(messages):
-                yield msg
-
-        with patch(
-            "claude_agent_sdk.query",
-            side_effect=capturing_query,
-        ):
-            async for _ in run_agent_loop(
-                **_DEFAULT_LOOP_ARGS,
-                conversation_state=conversation_state,
-            ):
-                pass
-
-        assert captured_options["mcp_servers"] == {}
-        assert captured_options["allowed_tools"] == []
-
-    @pytest.mark.asyncio
-    async def test_mcp_without_token(self, conversation_state):
-        messages = [
-            _make_init_message(),
-            _text_block_start_event(),
-            _text_delta_event("ok"),
-            _make_result_message(),
-        ]
-
-        captured_options = {}
-
-        async def capturing_query(prompt, options=None):
-            captured_options["mcp_servers"] = options.mcp_servers if options else {}
-            async for msg in _fake_query_from_messages(messages):
-                yield msg
-
-        with patch(
-            "claude_agent_sdk.query",
-            side_effect=capturing_query,
-        ):
-            async for _ in run_agent_loop(
-                api_key="test-key",
-                mcp_server_url="http://localhost:8123/mcp",
-                mcp_server_token=None,
-                system_prompt="sys",
-                user_text="Hi",
-                conversation_state=conversation_state,
-                model="claude-sonnet-4-5",
-                max_tokens=1024,
-                temperature=1.0,
-            ):
-                pass
-
-        ha_config = captured_options["mcp_servers"]["ha"]
-        assert "headers" not in ha_config
 
 
 class TestRunAgentLoopStreamingDeltas:
     """Verify the shape / ordering of yielded deltas."""
 
     @pytest.mark.asyncio
-    async def test_tool_use_events_not_yielded(self, conversation_state):
-        """tool_use stream events should NOT produce text deltas."""
-        messages = [
-            _make_init_message(),
-            # Tool use block (should not yield)
-            _tool_use_block_start_event(),
-            _input_json_delta_event(),
-            # Then text block
-            _text_block_start_event(),
-            _text_delta_event("done"),
-            _make_result_message(),
+    async def test_empty_content_not_yielded(self, conversation_state):
+        """Empty content strings should not produce deltas."""
+        events = [
+            {"type": "init", "session_id": "s1", "mcp_servers": []},
+            {"type": "role", "role": "assistant"},
+            {"type": "delta", "content": ""},
+            {"type": "delta", "content": "hello"},
+            {"type": "result", "session_id": "s1", "is_error": False},
         ]
 
-        with patch(
-            "claude_agent_sdk.query",
-            return_value=_fake_query_from_messages(messages),
-        ):
+        session_mock = _mock_session_for_events(events)
+
+        with patch("aiohttp.ClientSession", return_value=session_mock):
             collected = []
             async for delta in run_agent_loop(
                 **_DEFAULT_LOOP_ARGS,
@@ -452,48 +300,19 @@ class TestRunAgentLoopStreamingDeltas:
             ):
                 collected.append(delta)
 
-        # Only role marker + text delta
-        assert collected == [{"role": "assistant"}, {"content": "done"}]
+        assert collected == [{"role": "assistant"}, {"content": "hello"}]
 
     @pytest.mark.asyncio
-    async def test_role_only_yielded_once(self, conversation_state):
-        """Even with multiple text deltas, role marker is yielded only once."""
-        messages = [
-            _make_init_message(),
-            _text_block_start_event(),
-            _text_delta_event("Hello "),
-            _text_delta_event("world"),
-            _make_result_message(),
+    async def test_no_output_when_no_deltas(self, conversation_state):
+        """If the add-on only produces init and result, nothing is yielded."""
+        events = [
+            {"type": "init", "session_id": "s1", "mcp_servers": []},
+            {"type": "result", "session_id": "s1", "is_error": False},
         ]
 
-        with patch(
-            "claude_agent_sdk.query",
-            return_value=_fake_query_from_messages(messages),
-        ):
-            collected = []
-            async for delta in run_agent_loop(
-                **_DEFAULT_LOOP_ARGS,
-                conversation_state=conversation_state,
-            ):
-                collected.append(delta)
+        session_mock = _mock_session_for_events(events)
 
-        role_markers = [d for d in collected if "role" in d]
-        assert len(role_markers) == 1
-
-    @pytest.mark.asyncio
-    async def test_no_output_when_no_text(self, conversation_state):
-        """If the SDK only produces tool use (no text), nothing is yielded."""
-        messages = [
-            _make_init_message(),
-            _tool_use_block_start_event(),
-            _input_json_delta_event(),
-            _make_result_message(),
-        ]
-
-        with patch(
-            "claude_agent_sdk.query",
-            return_value=_fake_query_from_messages(messages),
-        ):
+        with patch("aiohttp.ClientSession", return_value=session_mock):
             collected = []
             async for delta in run_agent_loop(
                 **_DEFAULT_LOOP_ARGS,
@@ -504,102 +323,89 @@ class TestRunAgentLoopStreamingDeltas:
         assert collected == []
 
 
-class TestRunAgentLoopOptions:
-    """Verify that options are correctly passed to the SDK."""
+class TestRunAgentLoopPayload:
+    """Verify that the correct payload is sent to the add-on."""
 
     @pytest.mark.asyncio
-    async def test_model_and_system_prompt_passed(self, conversation_state):
-        messages = [
-            _make_init_message(),
-            _text_block_start_event(),
-            _text_delta_event("ok"),
-            _make_result_message(),
+    async def test_payload_contains_all_fields(self, conversation_state):
+        events = [
+            {"type": "init", "session_id": "s1", "mcp_servers": []},
+            {"type": "role", "role": "assistant"},
+            {"type": "delta", "content": "ok"},
+            {"type": "result", "session_id": "s1", "is_error": False},
         ]
 
-        captured_options = {}
-        captured_prompt = {}
+        captured: dict[str, Any] = {}
+        session_mock = _mock_session_for_events(events, captured=captured)
 
-        async def capturing_query(prompt, options=None):
-            captured_prompt["prompt"] = prompt
-            captured_options["model"] = options.model if options else None
-            captured_options["system_prompt"] = options.system_prompt if options else None
-            captured_options["max_turns"] = options.max_turns if options else None
-            async for msg in _fake_query_from_messages(messages):
-                yield msg
-
-        with patch(
-            "claude_agent_sdk.query",
-            side_effect=capturing_query,
-        ):
+        with patch("aiohttp.ClientSession", return_value=session_mock):
             async for _ in run_agent_loop(
-                api_key="test-key",
-                mcp_server_url=None,
-                mcp_server_token=None,
+                addon_url="http://my-addon:3000",
                 system_prompt="You are a smart home assistant.",
                 user_text="Turn on the lights",
                 conversation_state=conversation_state,
                 model="claude-opus-4-6",
                 max_tokens=2048,
                 temperature=0.5,
+                auth_mode="api_key",
+                api_key="sk-ant-test-key-123",
             ):
                 pass
 
-        assert captured_prompt["prompt"] == "Turn on the lights"
-        assert captured_options["model"] == "claude-opus-4-6"
-        assert captured_options["system_prompt"] == "You are a smart home assistant."
-        assert captured_options["max_turns"] == MAX_TOOL_ITERATIONS
+        assert captured["url"] == "http://my-addon:3000/api/chat"
+        payload = captured["json"]
+        assert payload["system_prompt"] == "You are a smart home assistant."
+        assert payload["user_text"] == "Turn on the lights"
+        assert payload["model"] == "claude-opus-4-6"
+        assert payload["auth_mode"] == "api_key"
+        assert payload["api_key"] == "sk-ant-test-key-123"
 
     @pytest.mark.asyncio
-    async def test_api_key_passed_via_env(self, conversation_state):
-        messages = [
-            _make_init_message(),
-            _text_block_start_event(),
-            _text_delta_event("ok"),
-            _make_result_message(),
+    async def test_max_auth_no_api_key(self, conversation_state):
+        """In max auth mode, no api_key should be in the payload."""
+        events = [
+            {"type": "init", "session_id": "s1", "mcp_servers": []},
+            {"type": "role", "role": "assistant"},
+            {"type": "delta", "content": "ok"},
+            {"type": "result", "session_id": "s1", "is_error": False},
         ]
 
-        captured_env = {}
+        captured: dict[str, Any] = {}
+        session_mock = _mock_session_for_events(events, captured=captured)
 
-        async def capturing_query(prompt, options=None):
-            captured_env.update(options.env if options else {})
-            async for msg in _fake_query_from_messages(messages):
-                yield msg
-
-        with patch(
-            "claude_agent_sdk.query",
-            side_effect=capturing_query,
-        ):
+        with patch("aiohttp.ClientSession", return_value=session_mock):
             async for _ in run_agent_loop(
-                api_key="sk-ant-test-key-123",
-                mcp_server_url=None,
-                mcp_server_token=None,
+                addon_url="http://my-addon:3000",
                 system_prompt="sys",
                 user_text="Hi",
                 conversation_state=conversation_state,
                 model="claude-sonnet-4-5",
                 max_tokens=1024,
                 temperature=1.0,
+                auth_mode="max",
+                api_key=None,
             ):
                 pass
 
-        assert captured_env["ANTHROPIC_API_KEY"] == "sk-ant-test-key-123"
+        payload = captured["json"]
+        assert payload["auth_mode"] == "max"
+        assert "api_key" not in payload
 
 
 class TestRunAgentLoopErrorHandling:
-    """Verify error reporting from the Agent SDK."""
+    """Verify error reporting from the add-on."""
 
     @pytest.mark.asyncio
-    async def test_error_result_logged(self, conversation_state):
-        """When ResultMessage.is_error is True, it should still complete gracefully."""
-        messages = [
-            _make_init_message(),
-            _make_result_message(is_error=True, result="Connection failed"),
+    async def test_error_result_handled(self, conversation_state):
+        """When result has is_error=True, it should still complete gracefully."""
+        events = [
+            {"type": "init", "session_id": "s1", "mcp_servers": []},
+            {"type": "result", "session_id": "s1", "is_error": True, "error": "Connection failed"},
         ]
 
-        with patch(
-            "claude_agent_sdk.query",
-            return_value=_fake_query_from_messages(messages),
-        ):
+        session_mock = _mock_session_for_events(events)
+
+        with patch("aiohttp.ClientSession", return_value=session_mock):
             collected = []
             async for delta in run_agent_loop(
                 **_DEFAULT_LOOP_ARGS,
@@ -610,29 +416,54 @@ class TestRunAgentLoopErrorHandling:
         # No text deltas since there was an error
         assert collected == []
         # Session ID should still be stored
-        assert conversation_state.session_id == "test-session"
+        assert conversation_state.session_id == "s1"
 
     @pytest.mark.asyncio
-    async def test_mcp_connection_failure_logged(self, conversation_state):
+    async def test_http_error_raises(self, conversation_state):
+        """Non-200 HTTP status should raise RuntimeError."""
+        response = AsyncMock()
+        response.status = 500
+        response.text = AsyncMock(return_value="Internal Server Error")
+
+        cm = AsyncMock()
+        cm.__aenter__ = AsyncMock(return_value=response)
+        cm.__aexit__ = AsyncMock(return_value=False)
+
+        session_mock = AsyncMock()
+        session_mock.post = MagicMock(return_value=cm)
+        session_mock.__aenter__ = AsyncMock(return_value=session_mock)
+        session_mock.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("aiohttp.ClientSession", return_value=session_mock):
+            with pytest.raises(RuntimeError, match="HTTP 500"):
+                async for _ in run_agent_loop(
+                    **_DEFAULT_LOOP_ARGS,
+                    conversation_state=conversation_state,
+                ):
+                    pass
+
+    @pytest.mark.asyncio
+    async def test_mcp_connection_failure_in_init(self, conversation_state):
         """MCP server failure in init message should be handled gracefully."""
-        messages = [
-            _make_init_message(
-                mcp_servers=[
+        events = [
+            {
+                "type": "init",
+                "session_id": "s1",
+                "mcp_servers": [
                     {"name": "ha", "status": "failed", "error": "Connection refused"}
-                ]
-            ),
-            _text_block_start_event(),
-            _text_delta_event("I couldn't connect to tools."),
-            _make_result_message(),
+                ],
+            },
+            {"type": "role", "role": "assistant"},
+            {"type": "delta", "content": "I couldn't connect to tools."},
+            {"type": "result", "session_id": "s1", "is_error": False},
         ]
 
-        with patch(
-            "claude_agent_sdk.query",
-            return_value=_fake_query_from_messages(messages),
-        ):
+        session_mock = _mock_session_for_events(events)
+
+        with patch("aiohttp.ClientSession", return_value=session_mock):
             collected = []
             async for delta in run_agent_loop(
-                **{**_DEFAULT_LOOP_ARGS, "mcp_server_url": "http://ha:8123/mcp"},
+                **_DEFAULT_LOOP_ARGS,
                 conversation_state=conversation_state,
             ):
                 collected.append(delta)

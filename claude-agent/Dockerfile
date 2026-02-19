@@ -1,0 +1,21 @@
+ARG BUILD_FROM
+FROM ${BUILD_FROM}
+
+# Install Node.js 20
+RUN apk add --no-cache nodejs npm
+
+# Set up working directory
+WORKDIR /app
+
+# Copy package files and install dependencies
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev
+
+# Copy application source
+COPY src/ ./src/
+
+# Create persistent data directory for Claude CLI auth
+RUN mkdir -p /data/.claude && \
+    ln -sf /data/.claude /root/.claude
+
+CMD ["node", "src/server.js"]

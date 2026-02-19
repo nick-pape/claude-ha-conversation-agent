@@ -9,16 +9,23 @@ LOGGER = logging.getLogger(__package__)
 
 DEFAULT_CONVERSATION_NAME = "Claude Conversation Agent"
 
+# Config keys - parent entry
+CONF_ADDON_URL = "addon_url"
+CONF_AUTH_MODE = "auth_mode"
+
 # Config keys - subentry
 CONF_RECOMMENDED = "recommended"
 CONF_PROMPT = "prompt"
 CONF_CHAT_MODEL = "chat_model"
 CONF_MAX_TOKENS = "max_tokens"
 CONF_TEMPERATURE = "temperature"
-CONF_MCP_SERVER_URL = "mcp_server_url"
-CONF_MCP_SERVER_TOKEN = "mcp_server_token"
+
+# Auth modes
+AUTH_MODE_API_KEY = "api_key"
+AUTH_MODE_MAX = "max"
 
 # Defaults
+DEFAULT_ADDON_URL = "http://2af94f27-claude-agent:3000"
 DEFAULT_CHAT_MODEL = "claude-sonnet-4-5"
 DEFAULT_MAX_TOKENS = 1024
 DEFAULT_TEMPERATURE = 1.0
@@ -36,7 +43,4 @@ DEFAULT_CONVERSATION_OPTIONS: dict[str, object] = {
 
 # Limits
 MAX_TOOL_ITERATIONS = 10
-MCP_TOOL_TIMEOUT = 30.0
-MCP_CONNECT_TIMEOUT = 10.0
 CONVERSATION_STATE_TTL = 300  # 5 minutes, matches HA session timeout
-MCP_REFRESH_INTERVAL = 1800  # 30 minutes

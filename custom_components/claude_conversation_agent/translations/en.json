@@ -6,19 +6,30 @@
         },
         "error": {
             "authentication_error": "Invalid authentication",
-            "cannot_connect": "Failed to connect",
+            "cannot_connect": "Failed to connect to Claude Agent add-on",
             "timeout_connect": "Timeout establishing connection",
             "unknown": "Unexpected error"
         },
         "step": {
             "user": {
                 "data": {
+                    "addon_url": "Add-on URL"
+                },
+                "data_description": {
+                    "addon_url": "URL of the Claude Agent add-on. Auto-detected when installed as a Supervisor add-on."
+                },
+                "description": "Connect to the Claude Agent add-on."
+            },
+            "auth": {
+                "data": {
+                    "auth_mode": "Authentication mode",
                     "api_key": "API Key"
                 },
                 "data_description": {
-                    "api_key": "Your Anthropic API key from console.anthropic.com."
+                    "auth_mode": "Choose how to authenticate with Claude.",
+                    "api_key": "Your Anthropic API key from console.anthropic.com. Required for API Key mode."
                 },
-                "description": "Enter your Anthropic API key to set up Claude as a conversation agent."
+                "description": "Configure authentication for Claude."
             },
             "reauth_confirm": {
                 "data": {
@@ -65,17 +76,6 @@
                         "temperature": "Higher values produce more creative responses."
                     },
                     "title": "Advanced settings"
-                },
-                "mcp": {
-                    "data": {
-                        "mcp_server_url": "MCP server URL",
-                        "mcp_server_token": "MCP server access token"
-                    },
-                    "data_description": {
-                        "mcp_server_url": "URL of the MCP server (e.g. http://localhost:8123/api/mcp for Home Assistant).",
-                        "mcp_server_token": "Long-lived access token for authenticating with the MCP server."
-                    },
-                    "title": "MCP server"
                 }
             }
         }

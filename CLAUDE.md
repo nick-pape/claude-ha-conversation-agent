@@ -4,9 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Home Assistant custom integration that uses Anthropic's Claude as a conversation agent, powered by the Claude Agent SDK. Claude controls smart home devices exclusively through MCP (Model Context Protocol) servers -- it never uses HA's native intent system. The integration slots into HA's voice pipeline as the "brain" between STT and TTS.
+Home Assistant custom integration that uses Anthropic's Claude as a conversation agent. The system is split into two components:
 
-The Claude Agent SDK handles the full agent loop: MCP connections, tool discovery, tool execution, and multi-turn reasoning. The integration is a thin wrapper that feeds user text in and streams text deltas out.
+1. **Node.js Add-on** (`claude-agent/`) -- runs in an HA add-on container, wraps the Claude Agent SDK, handles MCP connections, tool calling, and streaming. Exposes an HTTP+SSE API.
+2. **Python Integration** (`custom_components/claude_conversation_agent/`) -- thin HA conversation plumbing that sends user text to the add-on and pipes streaming deltas to TTS.
+
+Claude controls smart home devices exclusively through MCP servers -- it never uses HA's native intent system. The add-on auto-connects to HA's built-in MCP server using SUPERVISOR_TOKEN.
 
 ## Commands
 
@@ -18,53 +21,77 @@ pytest tests/
 ### Run a single test file
 ```bash
 pytest tests/test_agent.py
-pytest tests/test_mcp_manager.py
 ```
 
 ### Run a single test
 ```bash
-pytest tests/test_agent.py::TestRunAgentLoopSimpleText::test_simple_text_response -v
+pytest tests/test_agent.py::TestRunAgentLoopSimpleText::test_yields_role_then_content -v
 ```
 
-There is no build step, linter config, or type checker configured. The integration is pure Python loaded by Home Assistant at runtime.
+There is no build step, linter config, or type checker configured. The integration is pure Python loaded by Home Assistant at runtime. The add-on is a Node.js Express server.
 
 ## Architecture
 
-### Request Flow
+### Two-Component Design
 
 ```
-HA Voice Pipeline → ClaudeConversationEntity._async_handle_message()
-  → run_agent_loop() (async generator, yields text deltas for TTS streaming)
-    → Claude Agent SDK query() (handles MCP, tool calls, multi-turn internally)
-      → streams back SystemMessage, StreamEvent, AssistantMessage, ResultMessage
-    → extracts text deltas from StreamEvent, captures session_id from ResultMessage
+HA Integration (Python)              Add-on Container (Node.js)
+  ConversationEntity                   Express server (:3000)
+    → run_agent_loop()       ─POST──▶    POST /api/chat → SSE stream
+      reads SSE stream       ◀─SSE──     Agent SDK query()
+    → ChatLog → TTS                      ↕ MCP tool calls
+                                         MCP Server (HA /api/mcp)
 ```
 
-### Key Modules (`custom_components/claude_conversation_agent/`)
+### SSE Protocol (Integration ↔ Add-on)
 
-- **`agent.py`** -- `run_agent_loop()` async generator that wraps the Claude Agent SDK's `query()`. Extracts streaming text deltas from `StreamEvent` messages and captures session IDs from `ResultMessage` for conversation continuity. `ConversationStateManager` handles per-session state with TTL-based expiry (5 min default).
-- **`conversation.py`** -- `ClaudeConversationEntity` wires HA's conversation interface to the agent loop. Pipes async generator deltas into `ChatLog.async_add_delta_content_stream()`.
-- **`config_flow.py`** -- Multi-step UI config: API key validation → conversation settings → advanced model params → MCP server config. Uses HA subentries (parent entry holds API key, subentries hold per-agent config).
-- **`__init__.py`** -- Entry setup, creates `AsyncAnthropic` client. Uses Python 3.12+ `type` statement syntax.
+**Request**: `POST /api/chat` with JSON body containing `system_prompt`, `user_text`, `model`, `session_id`, `auth_mode`, `api_key`.
+
+**Response**: SSE stream with event types:
+- `init` -- session ID and MCP server status
+- `role` -- start of assistant message
+- `delta` -- text content chunk
+- `result` -- final status with session ID
+
+### Key Modules
+
+#### Add-on (`claude-agent/src/`)
+
+- **`server.js`** -- Express HTTP server. Endpoints: `POST /api/chat` (SSE stream), `GET /api/health`, `GET /api/auth/status`, `POST /api/auth/login`. Serves ingress UI.
+- **`agent.js`** -- Wraps `@anthropic-ai/claude-agent-sdk` `query()`. Auto-adds HA MCP server via SUPERVISOR_TOKEN. Disallows all built-in Claude Code tools (Bash, Read, Write, etc.) -- only MCP tools allowed.
+- **`auth.js`** -- Dual auth: API key (per-request from integration) and Max subscription (CLI auth persisted in `/data/.claude/`).
+- **`ui/index.html`** -- Ingress web UI showing auth status and Max login button.
+
+#### Integration (`custom_components/claude_conversation_agent/`)
+
+- **`agent.py`** -- `run_agent_loop()` async generator that POSTs to add-on `/api/chat`, reads SSE stream, yields `{"role": "assistant"}` and `{"content": "..."}` dicts. `ConversationStateManager` handles per-session state with TTL-based expiry.
+- **`conversation.py`** -- `ClaudeConversationEntity` wires HA's conversation interface to the agent loop. Pipes deltas into `ChatLog.async_add_delta_content_stream()`.
+- **`config_flow.py`** -- Config flow: hassio discovery or manual URL → auth mode (API key or Max) → conversation subentries.
+- **`__init__.py`** -- Entry setup, health-checks the add-on, stores URL as `runtime_data`. Uses Python 3.12+ `type` statement syntax.
 - **`const.py`** -- All config keys, defaults, and limits.
 
 ### Key Patterns
 
-- **Agent SDK delegation**: `run_agent_loop()` calls `claude_agent_sdk.query()` with `ClaudeAgentOptions`. The SDK manages the full agent loop (MCP connections, tool discovery, tool execution, multi-turn reasoning) internally.
-- **Streaming via StreamEvent**: With `include_partial_messages=True`, the SDK yields raw Claude API stream events. We extract `content_block_start` (text type) and `content_block_delta` (text_delta type) events.
-- **Session-based continuity**: `ConversationState` stores the SDK session ID. On follow-up turns, this is passed via `resume` to restore full context.
-- **Config subentries**: One parent ConfigEntry (API key) with multiple conversation subentries (each an independent agent with its own prompt, model, and MCP config).
+- **Add-on delegation**: All heavy lifting (Agent SDK, MCP, tool calling) runs in the Node.js add-on container. The Python integration is a thin HTTP+SSE client.
+- **Auto MCP**: The add-on auto-connects to HA's MCP server using `SUPERVISOR_TOKEN` from the HA Supervisor environment.
+- **Dual auth**: API key mode passes the key per-request. Max subscription mode uses CLI credentials persisted in the add-on container.
+- **Security**: Built-in Claude Code tools (Bash, Read, Write, etc.) are explicitly disallowed. Only MCP tools are permitted.
+- **Config subentries**: One parent ConfigEntry (add-on URL + auth mode) with multiple conversation subentries (each an independent agent with its own prompt and model).
 
 ## Testing
 
-Tests mock all Home Assistant modules via `conftest.py` stubs installed into `sys.modules` before any production code is imported. This allows tests to run without an actual HA installation. The `__init__.py` stub is pre-registered to avoid parsing its Python 3.12+ `type` syntax on older interpreters.
+Tests mock all Home Assistant modules via `conftest.py` stubs installed into `sys.modules` before any production code is imported. The `__init__.py` stub is pre-registered to avoid parsing its Python 3.12+ `type` syntax on older interpreters.
 
-The `claude_agent_sdk` module is also stubbed in `conftest.py` with dataclass versions of `SystemMessage`, `AssistantMessage`, `ResultMessage`, `StreamEvent`, and `ClaudeAgentOptions`. Tests patch `claude_agent_sdk.query` at the source module level (not on the agent module) because the import happens inside the function body.
+Tests for `run_agent_loop()` mock `aiohttp.ClientSession` to return fake SSE streams via `FakeSSEContent`. No `claude_agent_sdk` stubs are needed since the SDK runs in the add-on container.
 
-Key fixtures: `mock_anthropic_client`, `mock_mcp_session`, `mcp_manager`, `conversation_state`, `state_manager`.
+Key fixtures: `conversation_state`, `state_manager`.
 
 ## Dependencies
 
-- `anthropic>=0.49.0` -- Anthropic Python SDK (API key validation, model listing)
-- `claude-agent-sdk>=0.1.38` -- Claude Agent SDK (agent loop, MCP, tool calling)
-- Home Assistant 2025.7.0+ (runtime dependency, not pip-installed)
+### Python Integration
+- `aiohttp` (provided by HA, not pip-installed)
+- Home Assistant 2025.7.0+ (runtime dependency)
+
+### Node.js Add-on
+- `@anthropic-ai/claude-agent-sdk` -- Claude Agent SDK
+- `express` -- HTTP server
