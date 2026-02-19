@@ -1,4 +1,4 @@
-"""Claude agent loop - async generator that yields text deltas."""
+"""Claude agent loop using the Claude Agent SDK."""
 
 from __future__ import annotations
 
@@ -8,19 +8,16 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from typing import Any
 
-import anthropic
-
 from .const import MAX_TOOL_ITERATIONS
-from .mcp_manager import MCPManager
 
 _LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
 class ConversationState:
-    """Stores Claude's conversation history for a session."""
+    """Stores session ID for Agent SDK conversation continuity."""
 
-    messages: list[dict[str, Any]] = field(default_factory=list)
+    session_id: str | None = None
     created: float = field(default_factory=time.monotonic)
     last_accessed: float = field(default_factory=time.monotonic)
 
@@ -68,8 +65,9 @@ class ConversationStateManager:
 
 
 async def run_agent_loop(
-    client: anthropic.AsyncAnthropic,
-    mcp_manager: MCPManager,
+    api_key: str,
+    mcp_server_url: str | None,
+    mcp_server_token: str | None,
     system_prompt: str,
     user_text: str,
     conversation_state: ConversationState,
@@ -77,106 +75,111 @@ async def run_agent_loop(
     max_tokens: int,
     temperature: float,
 ) -> AsyncGenerator[dict[str, Any]]:
-    """Run the Claude agent loop, yielding text deltas.
+    """Run the Claude agent loop via the Agent SDK, yielding text deltas.
 
     Yields AssistantContentDeltaDict dicts with keys:
-      - {"role": "assistant"} — start of new assistant message
-      - {"content": "text chunk"} — text delta for TTS
+      - {"role": "assistant"} -- start of new assistant message
+      - {"content": "text chunk"} -- text delta for TTS
 
-    Never yields: tool_calls, thinking_content, native.
-
-    Side effects:
-      - Modifies conversation_state.messages in place
-      - Calls mcp_manager.call_tool() for tool execution
-
-    Terminates when:
-      - Claude returns stop_reason == "end_turn"
-      - MAX_TOOL_ITERATIONS reached
-      - An exception occurs (propagated to caller)
+    The Agent SDK handles tool discovery, execution, and the multi-turn
+    agent loop internally. We only extract streaming text deltas.
     """
-    tools = mcp_manager.get_claude_tools()
+    from claude_agent_sdk import (  # noqa: C0415
+        ClaudeAgentOptions,
+        ResultMessage,
+        StreamEvent,
+        SystemMessage,
+    )
+    from claude_agent_sdk import query as sdk_query
 
-    messages = conversation_state.messages
-    messages.append({"role": "user", "content": user_text})
-
-    for _iteration in range(MAX_TOOL_ITERATIONS):
-        api_args: dict[str, Any] = {
-            "model": model,
-            "max_tokens": int(max_tokens),
-            "system": system_prompt,
-            "messages": messages,
+    # Build MCP server config for the Agent SDK
+    mcp_servers: dict[str, Any] = {}
+    allowed_tools: list[str] = []
+    if mcp_server_url:
+        server_config: dict[str, Any] = {
+            "type": "sse",
+            "url": mcp_server_url,
         }
-        if temperature != 1.0:
-            api_args["temperature"] = temperature
-        if tools:
-            api_args["tools"] = tools
-
-        # Call Claude with streaming
-        async with client.messages.stream(**api_args) as stream:
-            text_started = False
-
-            async for event in stream:
-                if event.type == "content_block_start":
-                    if hasattr(event, "content_block") and event.content_block.type == "text":
-                        if not text_started:
-                            yield {"role": "assistant"}
-                            text_started = True
-
-                elif event.type == "content_block_delta":
-                    if hasattr(event, "delta") and event.delta.type == "text_delta":
-                        yield {"content": event.delta.text}
-
-                # tool_use events are consumed but NOT yielded to chat_log
-
-            final_message = await stream.get_final_message()
-
-        # Add complete assistant response to our conversation history
-        messages.append(
-            {
-                "role": "assistant",
-                "content": [
-                    block.model_dump() for block in final_message.content
-                ],
+        if mcp_server_token:
+            server_config["headers"] = {
+                "Authorization": f"Bearer {mcp_server_token}"
             }
-        )
+        mcp_servers["ha"] = server_config
+        allowed_tools = ["mcp__ha__*"]
 
+    options = ClaudeAgentOptions(
+        system_prompt=system_prompt,
+        model=model,
+        max_turns=MAX_TOOL_ITERATIONS,
+        mcp_servers=mcp_servers,
+        allowed_tools=allowed_tools,
+        permission_mode="bypassPermissions",
+        include_partial_messages=True,
+        env={"ANTHROPIC_API_KEY": api_key},
+    )
+
+    # Resume previous conversation if we have a session ID
+    if conversation_state.session_id:
+        options.resume = conversation_state.session_id
         _LOGGER.debug(
-            "Claude iteration %d: stop_reason=%s, content_blocks=%d",
-            _iteration + 1,
-            final_message.stop_reason,
-            len(final_message.content),
+            "Resuming Agent SDK session: %s", conversation_state.session_id
         )
 
-        # If no tool calls, we're done
-        if final_message.stop_reason == "end_turn":
-            break
+    _LOGGER.debug(
+        "Starting agent loop: model=%s, mcp_servers=%s, allowed_tools=%s",
+        model,
+        list(mcp_servers.keys()),
+        allowed_tools,
+    )
 
-        # Execute tool calls via MCP
-        if final_message.stop_reason == "tool_use":
-            tool_results: list[dict[str, Any]] = []
-            for block in final_message.content:
-                if block.type == "tool_use":
-                    _LOGGER.debug(
-                        "Executing tool: %s with args: %s",
-                        block.name,
-                        block.input,
-                    )
-                    result = await mcp_manager.call_tool(
-                        block.name, block.input
-                    )
-                    tool_results.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": result,
-                        }
+    text_started = False
+
+    async for message in sdk_query(prompt=user_text, options=options):
+        # Capture session metadata from init message
+        if isinstance(message, SystemMessage) and message.subtype == "init":
+            mcp_status = message.data.get("mcp_servers", [])
+            _LOGGER.info(
+                "Agent SDK initialized. MCP servers: %s", mcp_status
+            )
+            # Check for MCP connection failures
+            for server in mcp_status:
+                if isinstance(server, dict) and server.get("status") != "connected":
+                    _LOGGER.warning(
+                        "MCP server '%s' failed to connect: %s",
+                        server.get("name", "unknown"),
+                        server.get("status", "unknown"),
                     )
 
-            messages.append({"role": "user", "content": tool_results})
+        # Extract streaming text deltas from raw API events
+        if isinstance(message, StreamEvent):
+            event = message.event
+            event_type = event.get("type")
 
-        # Next iteration: reset for new Claude response
-        text_started = False
-    else:
-        _LOGGER.warning(
-            "Agent loop reached maximum iterations (%d)", MAX_TOOL_ITERATIONS
-        )
+            if event_type == "content_block_start":
+                content_block = event.get("content_block", {})
+                if content_block.get("type") == "text":
+                    if not text_started:
+                        yield {"role": "assistant"}
+                        text_started = True
+
+            elif event_type == "content_block_delta":
+                delta = event.get("delta", {})
+                if delta.get("type") == "text_delta":
+                    if not text_started:
+                        yield {"role": "assistant"}
+                        text_started = True
+                    yield {"content": delta["text"]}
+
+        # Capture session ID from result for conversation continuity
+        if isinstance(message, ResultMessage):
+            conversation_state.session_id = message.session_id
+            _LOGGER.debug(
+                "Agent loop complete: session=%s, turns=%s, cost=$%s",
+                message.session_id,
+                message.num_turns,
+                message.total_cost_usd,
+            )
+            if message.is_error:
+                _LOGGER.error(
+                    "Agent SDK reported error: %s", message.result
+                )

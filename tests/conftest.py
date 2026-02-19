@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import importlib
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -104,6 +106,66 @@ def _install_ha_stubs() -> None:  # noqa: C901
     ha_conv.async_get_result_from_chat_log = MagicMock()  # type: ignore[attr-defined]
 
 
+def _install_claude_agent_sdk_stubs() -> None:
+    """Create stub for claude_agent_sdk so tests don't need the real package."""
+
+    sdk = _make_module("claude_agent_sdk")
+
+    # --- Message types as simple dataclasses ---
+
+    @dataclass
+    class SystemMessage:
+        subtype: str = ""
+        data: dict[str, Any] = field(default_factory=dict)
+        session_id: str = ""
+
+    @dataclass
+    class AssistantMessage:
+        content: list[Any] = field(default_factory=list)
+        model: str = ""
+
+    @dataclass
+    class ResultMessage:
+        subtype: str = ""
+        duration_ms: int = 0
+        duration_api_ms: int = 0
+        is_error: bool = False
+        num_turns: int = 0
+        session_id: str = ""
+        total_cost_usd: float | None = None
+        usage: dict[str, Any] | None = None
+        result: str | None = None
+
+    @dataclass
+    class StreamEvent:
+        uuid: str = ""
+        session_id: str = ""
+        event: dict[str, Any] = field(default_factory=dict)
+        parent_tool_use_id: str | None = None
+
+    @dataclass
+    class ClaudeAgentOptions:
+        system_prompt: str | None = None
+        model: str | None = None
+        max_turns: int | None = None
+        mcp_servers: dict[str, Any] = field(default_factory=dict)
+        allowed_tools: list[str] = field(default_factory=list)
+        permission_mode: str | None = None
+        include_partial_messages: bool = False
+        env: dict[str, str] = field(default_factory=dict)
+        resume: str | None = None
+
+    # Assign to module
+    sdk.SystemMessage = SystemMessage  # type: ignore[attr-defined]
+    sdk.AssistantMessage = AssistantMessage  # type: ignore[attr-defined]
+    sdk.ResultMessage = ResultMessage  # type: ignore[attr-defined]
+    sdk.StreamEvent = StreamEvent  # type: ignore[attr-defined]
+    sdk.ClaudeAgentOptions = ClaudeAgentOptions  # type: ignore[attr-defined]
+
+    # query is a placeholder — tests patch it per-test
+    sdk.query = MagicMock()  # type: ignore[attr-defined]
+
+
 def _install_integration_package_stubs() -> None:
     """Pre-register the custom_components package hierarchy.
 
@@ -140,6 +202,7 @@ def _install_integration_package_stubs() -> None:
 
 # Install stubs at import time - before any test file is collected.
 _install_ha_stubs()
+_install_claude_agent_sdk_stubs()
 _install_integration_package_stubs()
 
 

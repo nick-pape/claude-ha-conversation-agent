@@ -5,11 +5,9 @@ from __future__ import annotations
 import logging
 from typing import Literal
 
-import anthropic
-
 from homeassistant.components import conversation
 from homeassistant.config_entries import ConfigSubentry
-from homeassistant.const import MATCH_ALL
+from homeassistant.const import CONF_API_KEY, MATCH_ALL
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -28,10 +26,8 @@ from .const import (
     DEFAULT_MAX_TOKENS,
     DEFAULT_TEMPERATURE,
     DOMAIN,
-    LOGGER,
 )
 from .entity import ClaudeBaseLLMEntity
-from .mcp_manager import MCPManager
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -56,7 +52,11 @@ class ClaudeConversationEntity(
     conversation.AbstractConversationAgent,
     ClaudeBaseLLMEntity,
 ):
-    """Claude conversation agent entity."""
+    """Claude conversation agent entity.
+
+    Uses the Claude Agent SDK for automatic tool calling via MCP.
+    The SDK handles MCP connections, tool discovery, and the agent loop.
+    """
 
     _attr_supports_streaming = True
 
@@ -68,7 +68,6 @@ class ClaudeConversationEntity(
         self._attr_supported_features = (
             conversation.ConversationEntityFeature.CONTROL
         )
-        self._mcp_manager = MCPManager()
         self._state_manager = ConversationStateManager(
             ttl_seconds=CONVERSATION_STATE_TTL
         )
@@ -78,29 +77,8 @@ class ClaudeConversationEntity(
         """Return supported languages."""
         return MATCH_ALL
 
-    async def async_added_to_hass(self) -> None:
-        """Connect to MCP servers when entity is added."""
-        await super().async_added_to_hass()
-        mcp_url = self.subentry.data.get(CONF_MCP_SERVER_URL)
-        mcp_token = self.subentry.data.get(CONF_MCP_SERVER_TOKEN)
-        if mcp_url:
-            try:
-                await self._mcp_manager.connect(
-                    name="ha",
-                    url=mcp_url,
-                    token=mcp_token,
-                )
-            except Exception:
-                _LOGGER.warning(
-                    "Failed to connect to MCP server at %s. "
-                    "Agent will work without tool access.",
-                    mcp_url,
-                    exc_info=True,
-                )
-
     async def async_will_remove_from_hass(self) -> None:
-        """Disconnect MCP servers when entity is removed."""
-        await self._mcp_manager.disconnect_all()
+        """Clean up conversation states when entity is removed."""
         self._state_manager.clear()
         await super().async_will_remove_from_hass()
 
@@ -134,8 +112,9 @@ class ClaudeConversationEntity(
             async for _ in chat_log.async_add_delta_content_stream(
                 self.entity_id,
                 run_agent_loop(
-                    client=self.entry.runtime_data,
-                    mcp_manager=self._mcp_manager,
+                    api_key=self.entry.data[CONF_API_KEY],
+                    mcp_server_url=options.get(CONF_MCP_SERVER_URL),
+                    mcp_server_token=options.get(CONF_MCP_SERVER_TOKEN),
                     system_prompt=system_prompt,
                     user_text=user_input.text,
                     conversation_state=state,
@@ -147,12 +126,10 @@ class ClaudeConversationEntity(
                 ),
             ):
                 pass
-        except anthropic.AuthenticationError as err:
-            self.entry.async_start_reauth(self.hass)
-            raise HomeAssistantError(
-                "Authentication failed. Please update your API key."
-            ) from err
-        except anthropic.AnthropicError as err:
+        except HomeAssistantError:
+            raise
+        except Exception as err:
+            _LOGGER.exception("Error in agent loop")
             raise HomeAssistantError(
                 f"Error communicating with Claude: {err}"
             ) from err

@@ -9,6 +9,6 @@
     "integration_type": "service",
     "iot_class": "cloud_polling",
     "issue_tracker": "https://github.com/nick-pape/claude-ha-conversation-agent/issues",
-    "requirements": ["anthropic>=0.49.0", "mcp>=1.26.0"],
+    "requirements": ["anthropic>=0.49.0", "claude-agent-sdk>=0.1.38"],
     "version": "0.1.0"
 }
