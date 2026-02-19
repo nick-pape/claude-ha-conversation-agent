@@ -19,7 +19,5 @@ ports_description:
   3000/tcp: Claude Agent HTTP API (internal only)
 map:
   - addon_config:rw
-options:
-  auth_mode: api_key
-schema:
-  auth_mode: str
+options: {}
+schema: {}
