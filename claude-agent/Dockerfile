@@ -18,4 +18,5 @@ COPY src/ ./src/
 RUN mkdir -p /data/.claude && \
     ln -sf /data/.claude /root/.claude
 
-CMD ["node", "src/server.js"]
+# Copy s6-overlay service definition (replaces CMD)
+COPY rootfs /
