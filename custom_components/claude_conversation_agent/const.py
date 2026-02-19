@@ -25,7 +25,7 @@ AUTH_MODE_API_KEY = "api_key"
 AUTH_MODE_MAX = "max"
 
 # Defaults
-DEFAULT_ADDON_URL = "http://2af94f27-claude-agent:3000"
+DEFAULT_ADDON_URL = "http://f5f163bb-claude-agent:3000"
 DEFAULT_CHAT_MODEL = "claude-sonnet-4-5"
 DEFAULT_MAX_TOKENS = 1024
 DEFAULT_TEMPERATURE = 1.0
