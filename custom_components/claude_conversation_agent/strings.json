@@ -13,12 +13,10 @@
         "step": {
             "user": {
                 "data": {
-                    "addon_url": "Add-on URL",
-                    "mcp_url": "MCP Server URL"
+                    "addon_url": "Add-on URL"
                 },
                 "data_description": {
-                    "addon_url": "URL of the Claude Agent add-on. Auto-detected when installed as a Supervisor add-on.",
-                    "mcp_url": "URL of your MCP server (e.g. from the HA MCP add-on). This gives Claude access to your smart home."
+                    "addon_url": "URL of the Claude Agent add-on. Auto-detected when installed as a Supervisor add-on."
                 },
                 "description": "Connect to the Claude Agent add-on."
             },

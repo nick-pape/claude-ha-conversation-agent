@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { runAgent } from "./agent.js";
 import { getAuthStatus, initiateLogin, completeLogin } from "./auth.js";
+import { loadMcpServers, setMcpServer, removeMcpServer } from "./mcp-config.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -59,6 +60,25 @@ app.post("/api/auth/complete", async (req, res) => {
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
+});
+
+// ── MCP server management ────────────────────────────────────────────
+app.get("/api/mcp/servers", (_req, res) => {
+  res.json(loadMcpServers());
+});
+
+app.post("/api/mcp/servers", (req, res) => {
+  const { name, type, url } = req.body;
+  if (!name || !url) {
+    return res.status(400).json({ error: "name and url are required" });
+  }
+  const servers = setMcpServer(name, { type: type || "http", url });
+  res.json(servers);
+});
+
+app.delete("/api/mcp/servers/:name", (req, res) => {
+  const servers = removeMcpServer(req.params.name);
+  res.json(servers);
 });
 
 // ── Chat (SSE stream) ─────────────────────────────────────────────────

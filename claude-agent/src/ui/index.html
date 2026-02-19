@@ -85,6 +85,66 @@
     }
     #message.success { color: #16a34a; }
     #message.error { color: #dc2626; }
+    .server-list { margin-bottom: 12px; }
+    .server-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: #f9fafb;
+      border-radius: 8px;
+      margin-bottom: 6px;
+      font-size: 13px;
+    }
+    .server-item .server-info { flex: 1; min-width: 0; }
+    .server-item .server-name { font-weight: 600; }
+    .server-item .server-url {
+      color: #6b7280;
+      word-break: break-all;
+      font-family: monospace;
+      font-size: 12px;
+    }
+    .server-item .server-type {
+      color: #9ca3af;
+      font-size: 11px;
+      text-transform: uppercase;
+      margin-left: 6px;
+    }
+    .server-item button.remove-btn {
+      background: none;
+      color: #ef4444;
+      border: 1px solid #ef4444;
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 12px;
+      margin: 0;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .server-item button.remove-btn:hover { background: #fef2f2; }
+    .add-server-form {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: end;
+    }
+    .add-server-form .field { display: flex; flex-direction: column; gap: 2px; }
+    .add-server-form .field label { font-size: 11px; color: #6b7280; }
+    .add-server-form .field input, .add-server-form .field select {
+      padding: 6px 10px;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+    .add-server-form .field input:focus, .add-server-form .field select:focus {
+      outline: none;
+      border-color: #d97706;
+      box-shadow: 0 0 0 2px rgba(217, 119, 6, 0.2);
+    }
+    .add-server-form .field.name-field input { width: 100px; }
+    .add-server-form .field.url-field { flex: 1; min-width: 200px; }
+    .add-server-form .field.url-field input { width: 100%; }
+    .empty-state { color: #9ca3af; font-size: 13px; font-style: italic; margin-bottom: 12px; }
   </style>
 </head>
 <body>
@@ -118,6 +178,32 @@
         </div>
       </div>
       <div id="message"></div>
+    </div>
+
+    <div class="card">
+      <h2>MCP Servers</h2>
+      <div id="server-list" class="server-list">
+        <div class="empty-state">Loading...</div>
+      </div>
+      <div class="add-server-form">
+        <div class="field name-field">
+          <label>Name</label>
+          <input type="text" id="mcp-name" placeholder="ha">
+        </div>
+        <div class="field url-field">
+          <label>URL</label>
+          <input type="text" id="mcp-url" placeholder="http://...">
+        </div>
+        <div class="field">
+          <label>Type</label>
+          <select id="mcp-type">
+            <option value="http">HTTP</option>
+            <option value="sse">SSE</option>
+          </select>
+        </div>
+        <button id="add-mcp-btn">Add</button>
+      </div>
+      <div id="mcp-message"></div>
     </div>
   </div>
 
@@ -273,8 +359,105 @@
       }
     });
 
+    // ── MCP server management ──
+    async function loadServers() {
+      try {
+        const res = await fetch(`${basePath}/api/mcp/servers`);
+        const servers = await res.json();
+        renderServers(servers);
+      } catch {
+        document.getElementById("server-list").innerHTML =
+          '<div class="empty-state">Error loading servers</div>';
+      }
+    }
+
+    function renderServers(servers) {
+      const list = document.getElementById("server-list");
+      const names = Object.keys(servers);
+      if (names.length === 0) {
+        list.innerHTML = '<div class="empty-state">No MCP servers configured. Add one below to give Claude access to your smart home.</div>';
+        return;
+      }
+      list.innerHTML = names.map(name => {
+        const s = servers[name];
+        return `<div class="server-item">
+          <div class="server-info">
+            <span class="server-name">${esc(name)}</span>
+            <span class="server-type">${esc(s.type || "http")}</span>
+            <br><span class="server-url">${esc(s.url)}</span>
+          </div>
+          <button class="remove-btn" data-name="${esc(name)}">Remove</button>
+        </div>`;
+      }).join("");
+
+      list.querySelectorAll(".remove-btn").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          btn.disabled = true;
+          btn.textContent = "...";
+          try {
+            const res = await fetch(`${basePath}/api/mcp/servers/${encodeURIComponent(btn.dataset.name)}`, { method: "DELETE" });
+            const servers = await res.json();
+            renderServers(servers);
+          } catch (err) {
+            showMcpMessage(`Error: ${err.message}`, "error");
+          }
+        });
+      });
+    }
+
+    function esc(str) {
+      const d = document.createElement("div");
+      d.textContent = str;
+      return d.innerHTML;
+    }
+
+    function showMcpMessage(text, type) {
+      const el = document.getElementById("mcp-message");
+      el.textContent = text;
+      el.className = type || "";
+      el.style.marginTop = "8px";
+      el.style.fontSize = "13px";
+      if (type === "success") el.style.color = "#16a34a";
+      else if (type === "error") el.style.color = "#dc2626";
+      else el.style.color = "#666";
+    }
+
+    document.getElementById("add-mcp-btn").addEventListener("click", async () => {
+      const name = document.getElementById("mcp-name").value.trim();
+      const url = document.getElementById("mcp-url").value.trim();
+      const type = document.getElementById("mcp-type").value;
+
+      if (!name || !url) {
+        showMcpMessage("Name and URL are required.", "error");
+        return;
+      }
+
+      const btn = document.getElementById("add-mcp-btn");
+      btn.disabled = true;
+      try {
+        const res = await fetch(`${basePath}/api/mcp/servers`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, type, url }),
+        });
+        const servers = await res.json();
+        if (res.ok) {
+          renderServers(servers);
+          document.getElementById("mcp-name").value = "";
+          document.getElementById("mcp-url").value = "";
+          showMcpMessage(`Added "${name}"`, "success");
+        } else {
+          showMcpMessage(servers.error || "Error adding server", "error");
+        }
+      } catch (err) {
+        showMcpMessage(`Error: ${err.message}`, "error");
+      }
+      btn.disabled = false;
+    });
+
     checkHealth();
     checkAuth();
+    loadServers();
   </script>
 </body>
 </html>

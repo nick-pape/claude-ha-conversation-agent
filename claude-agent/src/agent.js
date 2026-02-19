@@ -9,6 +9,7 @@
  */
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { loadMcpServers } from "./mcp-config.js";
 
 /** Built-in tools that must never be available to the agent. */
 const DISALLOWED_BUILTIN_TOOLS = [
@@ -29,11 +30,13 @@ const DISALLOWED_BUILTIN_TOOLS = [
 /**
  * Build the MCP server config dict for the Agent SDK.
  *
- * MCP servers are configured by the user in the HA integration
- * and passed per-request. The add-on does not auto-discover them.
+ * Merges persisted MCP servers (from /data/mcp_servers.json)
+ * with any per-request overrides. Persisted servers are the
+ * primary source; per-request servers can add or override.
  */
 function buildMcpServers(userMcpServers) {
-  return { ...userMcpServers };
+  const persisted = loadMcpServers();
+  return { ...persisted, ...userMcpServers };
 }
 
 /**
@@ -112,7 +115,14 @@ export async function runAgent({
       continue;
     }
 
-    // ── Streaming text deltas ──
+    // ── New assistant turn (between tool rounds) ──
+    if (message.type === "assistant") {
+      // Reset so the next text block emits a fresh role event
+      textStarted = false;
+      continue;
+    }
+
+    // ── Streaming content blocks ──
     if (message.type === "stream_event" && message.event) {
       const event = message.event;
 
@@ -123,6 +133,13 @@ export async function runAgent({
             sendEvent({ type: "role", role: "assistant" });
             textStarted = true;
           }
+        } else if (block && block.type === "tool_use") {
+          // Emit tool start so the client knows something is happening
+          sendEvent({
+            type: "tool_start",
+            tool: block.name || "unknown",
+            tool_id: block.id || null,
+          });
         }
       } else if (event.type === "content_block_delta") {
         const delta = event.delta;
@@ -134,6 +151,15 @@ export async function runAgent({
           sendEvent({ type: "delta", content: delta.text });
         }
       }
+      continue;
+    }
+
+    // ── Tool result (tool finished executing) ──
+    if (message.type === "tool_result") {
+      sendEvent({
+        type: "tool_done",
+        tool_id: message.tool_use_id || null,
+      });
       continue;
     }
 

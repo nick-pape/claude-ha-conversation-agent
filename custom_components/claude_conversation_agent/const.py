@@ -12,8 +12,6 @@ DEFAULT_CONVERSATION_NAME = "Claude Conversation Agent"
 # Config keys - parent entry
 CONF_ADDON_URL = "addon_url"
 CONF_AUTH_MODE = "auth_mode"
-CONF_MCP_URL = "mcp_url"
-
 # Config keys - subentry
 CONF_RECOMMENDED = "recommended"
 CONF_PROMPT = "prompt"

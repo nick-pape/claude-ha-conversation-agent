@@ -36,7 +36,6 @@ from .const import (
     CONF_AUTH_MODE,
     CONF_CHAT_MODEL,
     CONF_MAX_TOKENS,
-    CONF_MCP_URL,
     CONF_PROMPT,
     CONF_RECOMMENDED,
     CONF_TEMPERATURE,
@@ -59,7 +58,6 @@ class ClaudeConversationAgentConfigFlow(ConfigFlow, domain=DOMAIN):
     MINOR_VERSION = 2
 
     _addon_url: str = DEFAULT_ADDON_URL
-    _mcp_url: str = ""
 
     async def async_step_hassio(
         self, discovery_info: dict[str, Any]
@@ -78,7 +76,6 @@ class ClaudeConversationAgentConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             self._addon_url = user_input.get(CONF_ADDON_URL, DEFAULT_ADDON_URL)
-            self._mcp_url = user_input.get(CONF_MCP_URL, "")
 
             # Verify add-on is reachable
             try:
@@ -111,9 +108,6 @@ class ClaudeConversationAgentConfigFlow(ConfigFlow, domain=DOMAIN):
                     ): TextSelector(
                         TextSelectorConfig(type=TextSelectorType.URL)
                     ),
-                    vol.Optional(CONF_MCP_URL): TextSelector(
-                        TextSelectorConfig(type=TextSelectorType.URL)
-                    ),
                 }
             ),
             errors=errors or None,
@@ -128,7 +122,6 @@ class ClaudeConversationAgentConfigFlow(ConfigFlow, domain=DOMAIN):
             entry_data: dict[str, Any] = {
                 CONF_ADDON_URL: self._addon_url,
                 CONF_AUTH_MODE: auth_mode,
-                CONF_MCP_URL: self._mcp_url,
             }
 
             if auth_mode == AUTH_MODE_API_KEY:

@@ -19,7 +19,6 @@ from .const import (
     CONF_AUTH_MODE,
     CONF_CHAT_MODEL,
     CONF_MAX_TOKENS,
-    CONF_MCP_URL,
     CONF_PROMPT,
     CONF_TEMPERATURE,
     CONVERSATION_STATE_TTL,
@@ -112,8 +111,6 @@ class ClaudeConversationEntity(
         addon_url = self.entry.runtime_data.addon_url
         auth_mode = self.entry.data.get(CONF_AUTH_MODE, AUTH_MODE_API_KEY)
         api_key = self.entry.data.get(CONF_API_KEY)
-        mcp_url = self.entry.data.get(CONF_MCP_URL, "")
-
         # 5. Run agent loop through chat_log's streaming interface
         try:
             async for _ in chat_log.async_add_delta_content_stream(
@@ -130,7 +127,6 @@ class ClaudeConversationEntity(
                     ),
                     auth_mode=auth_mode,
                     api_key=api_key,
-                    mcp_url=mcp_url,
                 ),
             ):
                 pass
