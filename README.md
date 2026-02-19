@@ -1,46 +1,35 @@
 # Claude Conversation Agent for Home Assistant
 
-A custom Home Assistant integration that uses Anthropic's Claude as a conversation agent. Claude controls your smart home exclusively through [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) servers, giving it access to the same tools and services that Home Assistant exposes via its built-in `/api/mcp` endpoint (or any external MCP server you configure).
+A custom Home Assistant integration that uses Anthropic's Claude as a conversation agent, powered by the [Claude Agent SDK](https://github.com/anthropics/claude-code-sdk-python). Claude controls your smart home exclusively through [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) servers, giving it access to the same tools and services that Home Assistant exposes via its built-in `/api/mcp` endpoint (or any external MCP server you configure).
 
-Home Assistant owns the voice pipeline (wake word, STT, TTS, Wyoming satellites). This integration slots in as the "brain" -- it receives transcribed text, runs an agentic loop against the Claude API, streams text back to TTS in real time, and executes tool calls through MCP.
+Home Assistant owns the voice pipeline (wake word, STT, TTS, Wyoming satellites). This integration slots in as the "brain" -- it receives transcribed text, delegates to the Claude Agent SDK (which handles the full agent loop, MCP connections, tool discovery, and tool execution), and streams text back to TTS in real time.
 
 ## Features
 
-- **Streaming responses** -- text is yielded to TTS as it arrives from Claude, so the user hears speech before tool calls finish.
+- **Claude Agent SDK** -- delegates the entire agent loop (tool calling, MCP connections, multi-turn reasoning) to the official SDK. No manual tool dispatch code.
+- **Streaming responses** -- text deltas are yielded to TTS as they arrive from Claude, so the user hears speech before tool calls finish.
 - **MCP-only tool access** -- Claude never uses HA's native intent system or built-in service calls. All actions go through MCP, keeping the tool surface explicit and auditable.
-- **Automatic transport negotiation** -- connects to MCP servers via Streamable HTTP, falling back to SSE if the server returns HTTP 405.
-- **Multi-turn conversations** -- conversation history is kept in memory with a 5-minute session timeout, matching HA's default pipeline behavior.
+- **Multi-turn conversations** -- the SDK's session ID is persisted per conversation with a 5-minute timeout, enabling natural follow-up questions.
 - **Configurable system prompt** -- supports Jinja2 templates, so you can inject dynamic context (entity states, time of day, etc.) into the prompt.
 - **Model selection** -- choose from Claude Sonnet 4.5, Claude Haiku 4.5, Claude Opus 4.5, or enter a custom model ID.
-- **Tunable parameters** -- max tokens (up to 32,768) and temperature (0.0 -- 2.0).
 - **HACS installable** -- no manual file copying required.
 
 ## Architecture
 
-```
-Wyoming satellite / HA app
-        |
-        v
-  HA Voice Pipeline (wake word -> STT -> [conversation agent] -> TTS)
-        |
-        v
-  ClaudeConversationEntity._async_handle_message()
-        |
-        v
-  run_agent_loop()  ----stream text deltas----> ChatLog ----> TTS
-        |                                          ^
-        v                                          |
-  Claude Messages API (streaming)                  |
-        |                                          |
-        +-- tool_use block? ----> MCPManager.call_tool()
-        |                              |
-        |                              v
-        |                        MCP Server (HA /api/mcp or external)
-        |                              |
-        +<---- tool result ------------+
-        |
-        v
-  Next Claude iteration (up to 10 tool rounds)
+```mermaid
+flowchart TD
+    A["Wyoming satellite / HA app"] --> B["HA Voice Pipeline\n(wake word → STT → conversation agent → TTS)"]
+    B --> C["ClaudeConversationEntity\n_async_handle_message()"]
+    C --> D["run_agent_loop()\nasync generator"]
+    D -->|"prompt + options"| E["Claude Agent SDK\nquery()"]
+    E -->|"stream events"| D
+    D -->|"text deltas"| F["ChatLog → TTS"]
+
+    E <-->|"tool calls"| G["MCP Server\n(HA /api/mcp or external)"]
+
+    style A fill:#f9f,stroke:#333
+    style E fill:#bbf,stroke:#333
+    style G fill:#bfb,stroke:#333
 ```
 
 Key components:
@@ -50,8 +39,7 @@ Key components:
 | `__init__.py` | Entry setup, creates the `AsyncAnthropic` client, forwards platforms. |
 | `config_flow.py` | UI config flow: API key validation, conversation subentry (prompt, model, MCP). |
 | `conversation.py` | `ClaudeConversationEntity` -- the HA conversation entity that wires everything together. |
-| `agent.py` | `run_agent_loop()` -- async generator that streams Claude responses and dispatches tool calls. `ConversationStateManager` handles session TTL. |
-| `mcp_manager.py` | `MCPManager` -- connects to MCP servers, discovers tools, executes tool calls with timeout. |
+| `agent.py` | `run_agent_loop()` -- async generator that wraps the Claude Agent SDK's `query()`. Extracts streaming text deltas and manages session IDs for conversation continuity. |
 | `entity.py` | Base entity class with device info. |
 | `const.py` | Domain name, defaults, limits. |
 
@@ -68,7 +56,7 @@ Key components:
 1. Open HACS in your Home Assistant instance.
 2. Go to **Integrations** and click the three-dot menu in the top right.
 3. Select **Custom repositories**.
-4. Enter the repository URL: `https://github.com/nickpwhite/claude-ha-conversation-agent`
+4. Enter the repository URL: `https://github.com/nick-pape/claude-ha-conversation-agent`
 5. Set the category to **Integration** and click **Add**.
 6. Find "Claude Conversation Agent" in the HACS store and click **Download**.
 7. Restart Home Assistant.
@@ -161,7 +149,7 @@ Keep responses concise and conversational.
 
 - Confirm the MCP server URL and token are configured in the conversation agent settings.
 - Check that the MCP server exposes the tools you expect. You can test with: `curl -H "Authorization: Bearer <token>" http://homeassistant.local:8123/api/mcp`
-- Review the logs for lines like `Connected to MCP server 'ha' with N tools` -- if N is 0, tool discovery failed.
+- Review the logs for `Agent SDK initialized. MCP servers:` -- this shows connection status for each configured server.
 
 ### Slow responses
 
@@ -174,10 +162,11 @@ Keep responses concise and conversational.
 - Conversation state expires after 5 minutes of inactivity. This is intentional and matches HA's default session timeout.
 - Reloading or reconfiguring the integration clears all conversation state.
 
-### MCP connection drops
+### MCP connection issues
 
-- The integration attempts to reconnect automatically. If the server is persistently unreachable, the agent will continue to work but without tool access.
+- The Claude Agent SDK manages MCP connections internally. If the server is unreachable, the agent will still respond but without tool access.
 - Check the MCP server's health independently to rule out server-side issues.
+- Look for `MCP server 'ha' failed to connect` warnings in the logs.
 
 ## Development
 
@@ -188,8 +177,7 @@ custom_components/claude_conversation_agent/
   __init__.py           # Integration setup
   config_flow.py        # Config flow UI
   conversation.py       # ConversationEntity
-  agent.py              # Agent loop (async generator)
-  mcp_manager.py        # MCP client connections
+  agent.py              # Agent SDK wrapper (async generator)
   entity.py             # Base entity
   const.py              # Constants and defaults
   manifest.json         # Integration metadata
@@ -201,18 +189,18 @@ custom_components/claude_conversation_agent/
 
 From `manifest.json`:
 
-- `anthropic==0.78.0` -- Anthropic Python SDK
-- `mcp>=1.26.0` -- Model Context Protocol client library
+- `anthropic>=0.49.0` -- Anthropic Python SDK (used for API key validation and model listing)
+- `claude-agent-sdk>=0.1.38` -- Claude Agent SDK (handles the full agent loop, MCP, and tool calling)
 
 ### Key design decisions
 
-1. **MCP-only tool access.** The integration passes `user_llm_hass_api=None` to `async_provide_llm_data`, which disables HA's native LLM tool system. All tool calls go through MCP, giving you full control over what Claude can do.
+1. **Claude Agent SDK.** Instead of implementing a manual agent loop with tool dispatch, the integration delegates to the Claude Agent SDK's `query()` function. The SDK handles MCP connections, tool discovery, tool execution, and multi-turn reasoning internally. This keeps the integration thin and benefits from upstream improvements.
 
-2. **Streaming via async generator.** `run_agent_loop()` is an async generator that yields `{"role": "assistant"}` and `{"content": "..."}` dicts. The conversation entity pipes these into HA's `ChatLog.async_add_delta_content_stream()`, which feeds the TTS delta listener.
+2. **MCP-only tool access.** The integration passes `user_llm_hass_api=None` to `async_provide_llm_data`, which disables HA's native LLM tool system. All tool calls go through MCP via the Agent SDK, giving you full control over what Claude can do.
 
-3. **Tool call loop.** After each Claude response with `stop_reason == "tool_use"`, the agent executes the tool calls via MCP and feeds the results back as the next user message. This loop runs up to 10 iterations (`MAX_TOOL_ITERATIONS`).
+3. **Streaming via async generator.** `run_agent_loop()` wraps the SDK's `query()` async iterator, extracting `StreamEvent` messages with `include_partial_messages=True`. It yields `{"role": "assistant"}` and `{"content": "..."}` dicts that the conversation entity pipes into HA's `ChatLog.async_add_delta_content_stream()`.
 
-4. **Namespaced tools.** MCP tools are namespaced as `{server_name}__{tool_name}` to avoid collisions when multiple MCP servers are connected.
+4. **Session-based continuity.** Conversation state stores the SDK session ID (not raw message history). On follow-up turns, the session ID is passed via `resume` to the SDK, which restores full conversation context internally.
 
 ### Running locally
 
@@ -220,7 +208,7 @@ For development, clone the repo into your HA custom_components directory:
 
 ```bash
 cd /path/to/ha-config/custom_components
-git clone https://github.com/nickpwhite/claude-ha-conversation-agent.git claude_conversation_agent
+git clone https://github.com/nick-pape/claude-ha-conversation-agent.git claude_conversation_agent
 ```
 
 Or symlink:
