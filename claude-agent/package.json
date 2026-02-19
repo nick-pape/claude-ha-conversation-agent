@@ -2,6 +2,7 @@
   "name": "claude-agent",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "description": "Claude conversation agent add-on for Home Assistant",
   "main": "src/server.js",
   "scripts": {

@@ -8,8 +8,8 @@ RUN apk add --no-cache nodejs npm
 WORKDIR /app
 
 # Copy package files and install dependencies
-COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev
+COPY package.json ./
+RUN npm install --omit=dev
 
 # Copy application source
 COPY src/ ./src/
