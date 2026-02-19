@@ -8,14 +8,28 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { createRequire } from "node:module";
 
 const execFileAsync = promisify(execFile);
 
 const CLAUDE_CONFIG_DIR = "/data/.claude";
 const CREDENTIALS_FILE = join(CLAUDE_CONFIG_DIR, "credentials.json");
+
+/**
+ * Find the Claude CLI binary bundled inside @anthropic-ai/claude-agent-sdk.
+ */
+function findClaudeCli() {
+  try {
+    const require = createRequire(import.meta.url);
+    const cliPath = require.resolve("@anthropic-ai/claude-agent-sdk/cli.js");
+    return cliPath;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Get the current authentication status.
@@ -60,7 +74,15 @@ export async function initiateLogin() {
   try {
     // Use the Claude CLI to start the login flow
     // The CLI prints a URL to stdout for the user to open
-    const { stdout, stderr } = await execFileAsync("claude", ["login"], {
+    const cliPath = findClaudeCli();
+    if (!cliPath) {
+      return {
+        login_url: null,
+        message: "Login failed: Claude CLI not found in node_modules.",
+      };
+    }
+
+    const { stdout, stderr } = await execFileAsync("node", [cliPath, "login"], {
       timeout: 30000,
       env: { ...process.env, HOME: "/root" },
     });
