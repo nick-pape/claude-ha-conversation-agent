@@ -8,8 +8,25 @@
  * disallowed -- only MCP tools are permitted.
  */
 
+import { existsSync } from "node:fs";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { loadMcpServers } from "./mcp-config.js";
+
+/**
+ * Native Claude Code CLI installed by the Dockerfile (musl build for Alpine).
+ * Passed explicitly so the SDK never falls back to a glibc binary it can't exec.
+ */
+const CLAUDE_EXECUTABLE = process.env.CLAUDE_CODE_EXECUTABLE || "/usr/local/bin/claude";
+
+if (existsSync(CLAUDE_EXECUTABLE)) {
+  console.log(`Claude Code executable: ${CLAUDE_EXECUTABLE}`);
+} else {
+  console.error(
+    `Claude Code executable not found at ${CLAUDE_EXECUTABLE} -- ` +
+      "the musl CLI package is missing from the image; rebuild the add-on. " +
+      "Falling back to the SDK's own binary lookup."
+  );
+}
 
 /** Built-in tools that must never be available to the agent. */
 const DISALLOWED_BUILTIN_TOOLS = [
@@ -94,6 +111,10 @@ export async function runAgent({
     env,
     stderr: (data) => console.error("[claude-cli]", data.trimEnd()),
   };
+
+  if (existsSync(CLAUDE_EXECUTABLE)) {
+    options.pathToClaudeCodeExecutable = CLAUDE_EXECUTABLE;
+  }
 
   // Resume previous conversation if session ID provided
   if (sessionId) {
