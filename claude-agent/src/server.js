@@ -68,11 +68,11 @@ app.get("/api/mcp/servers", (_req, res) => {
 });
 
 app.post("/api/mcp/servers", (req, res) => {
-  const { name, type, url } = req.body;
+  const { name, type, url, headers } = req.body;
   if (!name || !url) {
     return res.status(400).json({ error: "name and url are required" });
   }
-  const servers = setMcpServer(name, { type: type || "http", url });
+  const servers = setMcpServer(name, { type: type || "http", url, headers });
   res.json(servers);
 });
 

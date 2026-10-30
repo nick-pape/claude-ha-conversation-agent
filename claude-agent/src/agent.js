@@ -53,7 +53,26 @@ const DISALLOWED_BUILTIN_TOOLS = [
  */
 function buildMcpServers(userMcpServers) {
   const persisted = loadMcpServers();
-  return { ...persisted, ...userMcpServers };
+  const merged = { ...persisted, ...userMcpServers };
+  for (const [name, server] of Object.entries(merged)) {
+    if (server.headers) {
+      merged[name] = { ...server, headers: expandEnv(server.headers) };
+    }
+  }
+  return merged;
+}
+
+/**
+ * Replace ${NAME} in header values with environment variables, e.g.
+ * "Bearer ${SUPERVISOR_TOKEN}" for HA's own MCP server via the Supervisor.
+ */
+function expandEnv(headers) {
+  return Object.fromEntries(
+    Object.entries(headers).map(([k, v]) => [
+      k,
+      String(v).replace(/\$\{(\w+)\}/g, (_, n) => process.env[n] ?? ""),
+    ]),
+  );
 }
 
 /**
