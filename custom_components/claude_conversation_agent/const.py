@@ -18,6 +18,7 @@ CONF_PROMPT = "prompt"
 CONF_CHAT_MODEL = "chat_model"
 CONF_MAX_TOKENS = "max_tokens"
 CONF_TEMPERATURE = "temperature"
+CONF_MAX_SPOKEN_CHARS = "max_spoken_chars"
 
 # Auth modes
 AUTH_MODE_API_KEY = "api_key"
@@ -28,6 +29,8 @@ DEFAULT_ADDON_URL = "http://f5f163bb-claude-agent:3000"
 DEFAULT_CHAT_MODEL = "claude-sonnet-4-5"
 DEFAULT_MAX_TOKENS = 1024
 DEFAULT_TEMPERATURE = 1.0
+# Hard cap on a reply's spoken length (~25 s of speech); 0 disables it.
+DEFAULT_MAX_SPOKEN_CHARS = 350
 
 DEFAULT_PROMPT = (
     "You are a helpful voice assistant for a smart home powered by Home Assistant. "
