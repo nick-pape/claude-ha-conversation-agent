@@ -276,6 +276,59 @@ class TestRunAgentLoopSimpleText:
         assert conversation_state.session_id == "new-session"
 
 
+class TestRunAgentLoopToolNarration:
+    """Tools the add-on runs appear in the chat log as external tool calls."""
+
+    @pytest.mark.asyncio
+    async def test_tool_call_and_result_follow_narration(self, conversation_state):
+        events = [
+            {"type": "role", "role": "assistant"},
+            {"type": "delta", "content": "Let me check on that."},
+            {"type": "tool_start", "tool": "mcp__assist__GetLiveContext", "tool_id": "toolu_1"},
+            {"type": "tool_done", "tool_id": "toolu_1"},
+            {"type": "role", "role": "assistant"},
+            {"type": "delta", "content": " It's on."},
+            {"type": "result", "session_id": "s", "is_error": False},
+        ]
+
+        with patch("aiohttp.ClientSession", return_value=_mock_session_for_events(events)):
+            collected = [
+                d
+                async for d in run_agent_loop(
+                    **_DEFAULT_LOOP_ARGS, conversation_state=conversation_state
+                )
+            ]
+
+        assert collected[1] == {"content": "Let me check on that."}
+        [call] = collected[2]["tool_calls"]
+        assert (call.tool_name, call.id, call.external) == (
+            "mcp__assist__GetLiveContext",
+            "toolu_1",
+            True,
+        )
+        assert collected[3]["role"] == "tool_result"
+        assert collected[3]["tool_call_id"] == "toolu_1"
+        assert collected[3]["tool_name"] == "mcp__assist__GetLiveContext"
+        assert collected[4:] == [{"role": "assistant"}, {"content": " It's on."}]
+
+    @pytest.mark.asyncio
+    async def test_unknown_tool_done_is_ignored(self, conversation_state):
+        events = [
+            {"type": "tool_done", "tool_id": "never-started"},
+            {"type": "result", "session_id": "s", "is_error": False},
+        ]
+
+        with patch("aiohttp.ClientSession", return_value=_mock_session_for_events(events)):
+            collected = [
+                d
+                async for d in run_agent_loop(
+                    **_DEFAULT_LOOP_ARGS, conversation_state=conversation_state
+                )
+            ]
+
+        assert collected == []
+
+
 class TestRunAgentLoopStreamingDeltas:
     """Verify the shape / ordering of yielded deltas."""
 

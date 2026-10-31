@@ -71,6 +71,24 @@ def _install_ha_stubs() -> None:  # noqa: C901
     sys.modules["homeassistant.helpers.config_validation"].config_entry_only_config_schema = MagicMock()  # type: ignore[attr-defined]
     _make_module("homeassistant.helpers.httpx_client")
     sys.modules["homeassistant.helpers.httpx_client"].get_async_client = MagicMock()  # type: ignore[attr-defined]
+    _make_module("homeassistant.helpers.llm")
+    llm_mod = sys.modules["homeassistant.helpers.llm"]
+
+    @dataclass
+    class ToolInput:
+        tool_name: str
+        tool_args: dict
+        id: str = "generated-id"
+        external: bool = False
+
+    @dataclass
+    class ToolResult:
+        data: dict
+        error: bool = False
+
+    llm_mod.ToolInput = ToolInput  # type: ignore[attr-defined]
+    llm_mod.ToolResult = ToolResult  # type: ignore[attr-defined]
+    sys.modules["homeassistant.helpers"].llm = llm_mod  # type: ignore[attr-defined]
     _make_module("homeassistant.helpers.typing")
     sys.modules["homeassistant.helpers.typing"].ConfigType = dict  # type: ignore[attr-defined]
     _make_module("homeassistant.helpers.device_registry")

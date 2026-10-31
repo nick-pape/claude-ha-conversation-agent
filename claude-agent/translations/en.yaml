@@ -1,0 +1,8 @@
+configuration:
+  thinking:
+    name: Thinking
+    description: >-
+      "adaptive" lets Claude think before answering when it decides to.
+      "disabled" skips thinking for steadier, lower voice latency, and models
+      then say a short sentence before using a tool. Not every model accepts
+      "disabled".

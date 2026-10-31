@@ -11,6 +11,8 @@ from typing import Any
 
 import aiohttp
 
+from homeassistant.helpers import llm
+
 from .const import MAX_TOOL_ITERATIONS
 
 _LOGGER = logging.getLogger(__name__)
@@ -123,6 +125,7 @@ async def run_agent_loop(
                 )
 
             # Read SSE stream
+            tool_names: dict[str, str] = {}  # running tool call id -> name
             async for line in resp.content:
                 line_str = line.decode("utf-8").strip()
 
@@ -156,12 +159,36 @@ async def run_agent_loop(
                         yield {"content": content}
 
                 elif event_type == "tool_start":
-                    _LOGGER.debug(
-                        "Tool call: %s", data.get("tool", "unknown")
-                    )
+                    # The add-on runs its own tools; record each call in the
+                    # chat log as an external one. Home Assistant's pipeline
+                    # starts speaking the text it already has when a tool call
+                    # follows it, so a short "let me check" is heard while the
+                    # tool runs instead of after it.
+                    tool_id = data.get("tool_id") or llm.ToolInput("", {}).id
+                    tool_name = data.get("tool", "unknown")
+                    tool_names[tool_id] = tool_name
+                    _LOGGER.debug("Tool call: %s", tool_name)
+                    yield {
+                        "tool_calls": [
+                            llm.ToolInput(
+                                tool_name=tool_name,
+                                tool_args={},
+                                id=tool_id,
+                                external=True,
+                            )
+                        ]
+                    }
 
                 elif event_type == "tool_done":
-                    _LOGGER.debug("Tool complete: %s", data.get("tool_id"))
+                    tool_id = data.get("tool_id")
+                    _LOGGER.debug("Tool complete: %s", tool_id)
+                    if tool_id in tool_names:
+                        yield {
+                            "role": "tool_result",
+                            "tool_call_id": tool_id,
+                            "tool_name": tool_names.pop(tool_id),
+                            "result": llm.ToolResult(data={"status": "done"}),
+                        }
 
                 elif event_type == "result":
                     session_id = data.get("session_id")

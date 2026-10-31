@@ -8,11 +8,20 @@
  * disallowed -- only MCP tools are permitted.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { loadMcpServers } from "./mcp-config.js";
 import { SessionPool } from "./sessions.js";
 
 const pool = new SessionPool();
+
+/** The add-on's options from its Home Assistant configuration tab. */
+function addonOptions() {
+  try {
+    return JSON.parse(readFileSync("/data/options.json", "utf-8"));
+  } catch {
+    return {};
+  }
+}
 
 /** Home Assistant's DATE_TIME_PROMPT line, as rendered into the system prompt. */
 const DATE_TIME_LINE = /Current time is \d{1,2}:\d{2}:\d{2}\. Today's date is \d{4}-\d{2}-\d{2}\.\n?/;
@@ -147,16 +156,23 @@ export async function runAgent({
     options.pathToClaudeCodeExecutable = CLAUDE_EXECUTABLE;
   }
 
+  // Thinking off keeps voice latency steady: no thinking pass before the
+  // first word, and models then narrate a short sentence before tool calls.
+  const thinking = addonOptions().thinking || "adaptive";
+  if (thinking === "disabled") options.thinking = { type: "disabled" };
+
   // Options are fixed when a session starts, so a pre-warmed spare can only
   // serve requests with the same options; the key is everything but secrets
   // and callbacks.
-  const key = JSON.stringify({ systemPrompt, model, maxTurns, mcpServers, authMode, apiKey: Boolean(apiKey) });
+  const key = JSON.stringify({ systemPrompt, model, maxTurns, mcpServers, authMode, apiKey: Boolean(apiKey), thinking });
   const started = Date.now();
   const { session, how } = await pool.acquire({ sessionId, key, options });
 
   let currentSessionId = sessionId || null;
   let textStarted = false;
   let firstText = null;
+  let lastChar = ""; // last character sent, to space text blocks apart
+  let newBlock = false;
 
   for await (const message of session.turn(turnText)) {
     // ── Init message: capture session ID and MCP status ──
@@ -184,6 +200,7 @@ export async function runAgent({
       if (event.type === "content_block_start") {
         const block = event.content_block;
         if (block && block.type === "text") {
+          newBlock = true;
           if (!textStarted) {
             sendEvent({ type: "role", role: "assistant" });
             textStarted = true;
@@ -204,18 +221,27 @@ export async function runAgent({
             textStarted = true;
           }
           firstText ??= Date.now() - started;
-          sendEvent({ type: "delta", content: delta.text });
+          let text = delta.text;
+          // Text blocks either side of a tool call ("Let me check." / "It's
+          // on.") arrive with nothing between them; space them apart so they
+          // read, and split into sentences, correctly.
+          if (newBlock && lastChar && !/\s/.test(lastChar) && !/^\s/.test(text)) text = ` ${text}`;
+          newBlock = false;
+          if (text) lastChar = text.at(-1);
+          sendEvent({ type: "delta", content: text });
         }
       }
       continue;
     }
 
     // ── Tool result (tool finished executing) ──
-    if (message.type === "tool_result") {
-      sendEvent({
-        type: "tool_done",
-        tool_id: message.tool_use_id || null,
-      });
+    // The SDK delivers tool results as user messages with tool_result blocks.
+    if (message.type === "user" && Array.isArray(message.message?.content)) {
+      for (const block of message.message.content) {
+        if (block?.type === "tool_result") {
+          sendEvent({ type: "tool_done", tool_id: block.tool_use_id || null });
+        }
+      }
       continue;
     }
 

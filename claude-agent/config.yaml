@@ -1,6 +1,6 @@
 name: Claude Agent
 description: Claude conversation agent powered by Claude Agent SDK with MCP support
-version: 0.1.4
+version: 0.1.5
 slug: claude_agent
 url: https://github.com/nick-pape/claude-ha-conversation-agent
 arch:
@@ -20,5 +20,7 @@ ports_description:
   3000/tcp: Claude Agent HTTP API (internal only)
 map:
   - addon_config:rw
-options: {}
-schema: {}
+options:
+  thinking: adaptive
+schema:
+  thinking: list(adaptive|disabled)
