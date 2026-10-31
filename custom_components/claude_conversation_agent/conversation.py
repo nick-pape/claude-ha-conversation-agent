@@ -28,6 +28,7 @@ from .const import (
     DOMAIN,
 )
 from .entity import ClaudeBaseLLMEntity
+from .satellite_display import mirror_to_satellite, satellite_client
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -112,22 +113,24 @@ class ClaudeConversationEntity(
         auth_mode = self.entry.data.get(CONF_AUTH_MODE, AUTH_MODE_API_KEY)
         api_key = self.entry.data.get(CONF_API_KEY)
         # 5. Run agent loop through chat_log's streaming interface
+        deltas = run_agent_loop(
+            addon_url=addon_url,
+            system_prompt=system_prompt,
+            user_text=user_input.text,
+            conversation_state=state,
+            model=options.get(CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL),
+            max_tokens=options.get(CONF_MAX_TOKENS, DEFAULT_MAX_TOKENS),
+            temperature=options.get(CONF_TEMPERATURE, DEFAULT_TEMPERATURE),
+            auth_mode=auth_mode,
+            api_key=api_key,
+        )
+        # An alfred-satellite shows the whole reply and its tool calls on the TV.
+        client = satellite_client(self.hass, user_input.device_id)
+        if client is not None:
+            deltas = mirror_to_satellite(deltas, client)
         try:
             async for _ in chat_log.async_add_delta_content_stream(
-                self.entity_id,
-                run_agent_loop(
-                    addon_url=addon_url,
-                    system_prompt=system_prompt,
-                    user_text=user_input.text,
-                    conversation_state=state,
-                    model=options.get(CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL),
-                    max_tokens=options.get(CONF_MAX_TOKENS, DEFAULT_MAX_TOKENS),
-                    temperature=options.get(
-                        CONF_TEMPERATURE, DEFAULT_TEMPERATURE
-                    ),
-                    auth_mode=auth_mode,
-                    api_key=api_key,
-                ),
+                self.entity_id, deltas
             ):
                 pass
         except HomeAssistantError:

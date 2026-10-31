@@ -11,6 +11,7 @@ is never parsed by the interpreter (which may be 3.11).
 
 from __future__ import annotations
 
+import enum
 import importlib
 import sys
 from dataclasses import dataclass
@@ -58,6 +59,7 @@ def _install_ha_stubs() -> None:  # noqa: C901
     ha_ce.ConfigFlowResult = MagicMock  # type: ignore[attr-defined]
     ha_ce.ConfigSubentryFlow = MagicMock  # type: ignore[attr-defined]
     ha_ce.SubentryFlowResult = MagicMock  # type: ignore[attr-defined]
+    ha_ce.ConfigEntryState = enum.Enum("ConfigEntryState", "LOADED NOT_LOADED")  # type: ignore[attr-defined]
 
     # exceptions
     ha_exc = _make_module("homeassistant.exceptions")
@@ -95,6 +97,14 @@ def _install_ha_stubs() -> None:  # noqa: C901
     dr = sys.modules["homeassistant.helpers.device_registry"]
     dr.DeviceInfo = MagicMock  # type: ignore[attr-defined]
     dr.DeviceEntryType = MagicMock()  # type: ignore[attr-defined]
+    dr.async_get = MagicMock()  # type: ignore[attr-defined]
+    sys.modules["homeassistant.helpers"].device_registry = dr  # type: ignore[attr-defined]
+
+    # aioesphomeapi (ships with HA's ESPHome integration; used by satellite_display)
+    esphome_api = _make_module("aioesphomeapi")
+    esphome_api.VoiceAssistantEventType = enum.IntEnum(  # type: ignore[attr-defined]
+        "VoiceAssistantEventType", {"VOICE_ASSISTANT_INTENT_PROGRESS": 100}
+    )
     _make_module("homeassistant.helpers.entity")
     sys.modules["homeassistant.helpers.entity"].Entity = type("Entity", (), {})  # type: ignore[attr-defined]
     _make_module("homeassistant.helpers.entity_platform")
