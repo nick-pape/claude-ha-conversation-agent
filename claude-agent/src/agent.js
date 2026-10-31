@@ -173,6 +173,7 @@ export async function runAgent({
   let firstText = null;
   let lastChar = ""; // last character sent, to space text blocks apart
   let newBlock = false;
+  let textBlockOpen = false;
 
   for await (const message of session.turn(turnText)) {
     // ── Init message: capture session ID and MCP status ──
@@ -201,6 +202,7 @@ export async function runAgent({
         const block = event.content_block;
         if (block && block.type === "text") {
           newBlock = true;
+          textBlockOpen = true;
           if (!textStarted) {
             sendEvent({ type: "role", role: "assistant" });
             textStarted = true;
@@ -229,6 +231,15 @@ export async function runAgent({
           newBlock = false;
           if (text) lastChar = text.at(-1);
           sendEvent({ type: "delta", content: text });
+        }
+      } else if (event.type === "content_block_stop" && textBlockOpen) {
+        // End the block with a space right away: a sentence splitter only
+        // knows "Let me check on that." is complete once whitespace follows,
+        // and the next text may not come until a tool call has finished.
+        textBlockOpen = false;
+        if (lastChar && !/\s/.test(lastChar)) {
+          lastChar = " ";
+          sendEvent({ type: "delta", content: " " });
         }
       }
       continue;
