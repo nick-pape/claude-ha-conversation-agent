@@ -1,16 +1,21 @@
 /**
  * Agent SDK wrapper.
  *
- * Wraps @anthropic-ai/claude-agent-sdk query() to run the agent loop,
- * extract streaming text deltas, and emit them as SSE events.
+ * Runs each turn on a long-lived Agent SDK session (see sessions.js),
+ * extracts streaming text deltas, and emits them as SSE events.
  *
  * Built-in Claude Code tools (Bash, Read, Write, etc.) are explicitly
  * disallowed -- only MCP tools are permitted.
  */
 
 import { existsSync } from "node:fs";
-import { query } from "@anthropic-ai/claude-agent-sdk";
 import { loadMcpServers } from "./mcp-config.js";
+import { SessionPool } from "./sessions.js";
+
+const pool = new SessionPool();
+
+/** Home Assistant's DATE_TIME_PROMPT line, as rendered into the system prompt. */
+const DATE_TIME_LINE = /Current time is \d{1,2}:\d{2}:\d{2}\. Today's date is \d{4}-\d{2}-\d{2}\.\n?/;
 
 /**
  * Native Claude Code CLI installed by the Dockerfile (musl build for Alpine).
@@ -118,6 +123,13 @@ export async function runAgent({
   // For "max" auth mode, the CLI uses its own persisted credentials
   // in /data/.claude/ (symlinked to ~/.claude/)
 
+  // Home Assistant puts the current time (to the second) in the system prompt,
+  // which would make every turn's options differ. Move it into the user's
+  // message so sessions and the prompt cache can be reused.
+  const dateTime = systemPrompt?.match(DATE_TIME_LINE);
+  if (dateTime) systemPrompt = systemPrompt.replace(DATE_TIME_LINE, "");
+  const turnText = dateTime ? `[${dateTime[0].trim()}]\n${userText}` : userText;
+
   const options = {
     systemPrompt,
     model,
@@ -135,15 +147,18 @@ export async function runAgent({
     options.pathToClaudeCodeExecutable = CLAUDE_EXECUTABLE;
   }
 
-  // Resume previous conversation if session ID provided
-  if (sessionId) {
-    options.resume = sessionId;
-  }
+  // Options are fixed when a session starts, so a pre-warmed spare can only
+  // serve requests with the same options; the key is everything but secrets
+  // and callbacks.
+  const key = JSON.stringify({ systemPrompt, model, maxTurns, mcpServers, authMode, apiKey: Boolean(apiKey) });
+  const started = Date.now();
+  const { session, how } = await pool.acquire({ sessionId, key, options });
 
   let currentSessionId = sessionId || null;
   let textStarted = false;
+  let firstText = null;
 
-  for await (const message of query({ prompt: userText, options })) {
+  for await (const message of session.turn(turnText)) {
     // ── Init message: capture session ID and MCP status ──
     if (message.type === "system" && message.subtype === "init") {
       currentSessionId = message.session_id;
@@ -188,6 +203,7 @@ export async function runAgent({
             sendEvent({ type: "role", role: "assistant" });
             textStarted = true;
           }
+          firstText ??= Date.now() - started;
           sendEvent({ type: "delta", content: delta.text });
         }
       }
@@ -206,6 +222,10 @@ export async function runAgent({
     // ── Result message: send final status ──
     if (message.type === "result") {
       currentSessionId = message.session_id || currentSessionId;
+      console.log(
+        `Turn on ${how} session ${currentSessionId}: first text ${firstText ?? "-"} ms, ` +
+          `done ${Date.now() - started} ms`,
+      );
       sendEvent({
         type: "result",
         session_id: currentSessionId,
