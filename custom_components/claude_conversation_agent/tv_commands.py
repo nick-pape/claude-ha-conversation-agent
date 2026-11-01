@@ -39,9 +39,10 @@ _FILLER = {"go", "press", "move", "then", "and", "the", "button", "times", "time
 _OBJECT = r"(?: (?:it|this|the (?:tv|show|movie|video)))?"
 
 _LEADING = re.compile(
-    r"^(?:(?:hey|yo|ok|okay)\s+)?(?:snoop(?:\s+dogg?)?\s+)?(?:(?:please|can you|could you)\s+)?"
+    r"^(?:(?:hey|yo|ok|okay)\s+)?(?:snoop(?:\s+dogg?)?\s+)?"
+    r"(?:(?:please|can you|could you|would you|will you|i want you to|i need you to|go ahead and)\s+)*"
 )
-_TRAILING = re.compile(r"\s+(?:please|thanks|thank you)$")
+_TRAILING = re.compile(r"(?:\s+(?:please|thanks|thank you|for me|real quick|right now|now))+$")
 
 
 def normalize(text: str) -> str:
@@ -55,7 +56,17 @@ def normalize(text: str) -> str:
 
 def match(text: str) -> TvCommand | None:
     """The TV action for an obvious command, or None to let the agent decide."""
-    t = normalize(text)
+    if (command := _match(normalize(text))) is not None:
+        return command
+    # People pad a short command so speech recognition catches it ("Yo Snoop,
+    # can you please mute the TV? Mute."): an obvious last sentence counts.
+    sentences = [s for s in re.split(r"[.?!]+", text) if s.strip()]
+    if len(sentences) > 1:
+        return _match(normalize(sentences[-1]))
+    return None
+
+
+def _match(t: str) -> TvCommand | None:
     if not t:
         return None
     if re.fullmatch(r"(?:un)?mute(?: (?:it|the (?:tv|sound|soundbar|volume)))?", t):

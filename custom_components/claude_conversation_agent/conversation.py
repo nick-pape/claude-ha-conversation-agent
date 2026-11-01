@@ -125,6 +125,7 @@ class ClaudeConversationEntity(
         auth_mode = self.entry.data.get(CONF_AUTH_MODE, AUTH_MODE_API_KEY)
         api_key = self.entry.data.get(CONF_API_KEY)
         # 5. Run agent loop through chat_log's streaming interface
+        node = satellite_node(self.hass, user_input.device_id)
         deltas = run_agent_loop(
             addon_url=addon_url,
             system_prompt=system_prompt,
@@ -135,6 +136,7 @@ class ClaudeConversationEntity(
             temperature=options.get(CONF_TEMPERATURE, DEFAULT_TEMPERATURE),
             auth_mode=auth_mode,
             api_key=api_key,
+            satellite={"node": node, "tv": self._has_tv(node)} if node else None,
         )
         # An alfred-satellite shows the whole reply and its tool calls on the TV.
         client = satellite_client(self.hass, user_input.device_id)
@@ -156,16 +158,23 @@ class ClaudeConversationEntity(
         # 6. Return result from chat_log
         return conversation.async_get_result_from_chat_log(user_input, chat_log)
 
+    def _has_tv(self, node: str | None) -> bool:
+        """Whether satellite node offers TV actions (alfred-satellite --tv)."""
+        return node is not None and self.hass.services.has_service("esphome", _tv_service(node, "tv_keys"))
+
     async def _async_run_tv_command(
         self, user_input: conversation.ConversationInput, command: tv_commands.TvCommand
     ) -> bool:
         """Run a TV action on the satellite that heard the request; False if it has none."""
         node = satellite_node(self.hass, user_input.device_id)
-        if node is None:
+        if not self._has_tv(node):
             return False
-        service = f"{node.replace('-', '_')}_{command.action}"
-        if not self.hass.services.has_service("esphome", service):
-            return False
+        service = _tv_service(node, command.action)
         _LOGGER.debug("TV command %r -> esphome.%s %s", user_input.text, service, command.data)
         await self.hass.services.async_call("esphome", service, command.data, blocking=False)
         return True
+
+
+def _tv_service(node: str, action: str) -> str:
+    """The esphome service Home Assistant registers for a satellite's action."""
+    return f"{node.replace('-', '_')}_{action}"

@@ -117,13 +117,15 @@ export class SessionPool {
    *   "resumed" a fresh process resuming a session this pool no longer holds
    *
    * `key` identifies the options; a spare is only used for the same key.
+   * `makeOptions` builds them afresh for each process, since an in-process
+   * MCP server instance serves one process at a time.
    */
-  async acquire({ sessionId, key, options }) {
+  async acquire({ sessionId, key, makeOptions }) {
     if (sessionId) {
       const live = this.#live.get(sessionId);
       if (live && !live.busy && !live.closed) return { session: live, how: "live" };
       const input = new InputQueue();
-      const session = new LiveSession(this, query({ prompt: input, options: { ...options, resume: sessionId } }), input);
+      const session = new LiveSession(this, query({ prompt: input, options: { ...makeOptions(), resume: sessionId } }), input);
       return { session, how: "resumed" };
     }
 
@@ -133,19 +135,19 @@ export class SessionPool {
       this.#spare = null;
     }
     const input = new InputQueue();
-    const q = warm ? warm.query(input) : query({ prompt: input, options });
+    const q = warm ? warm.query(input) : query({ prompt: input, options: makeOptions() });
     const session = new LiveSession(this, q, input);
-    this.warmSpare(key, options);
+    this.warmSpare(key, makeOptions);
     return { session, how: warm ? "warm" : "cold" };
   }
 
   /** Starts warming a spare for `key`, replacing a spare for other options. */
-  warmSpare(key, options) {
+  warmSpare(key, makeOptions) {
     if (this.#spare && this.#spare.key === key) return;
     this.#spare?.warm.then((w) => w?.close());
     const spare = {
       key,
-      warm: startup({ options }).catch((err) => {
+      warm: startup({ options: makeOptions() }).catch((err) => {
         console.error("Pre-warming a Claude session failed:", err.message);
         if (this.#spare === spare) this.#spare = null;
         return null;

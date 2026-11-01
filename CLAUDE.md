@@ -54,7 +54,7 @@ flowchart LR
 
 ### SSE Protocol (Integration ↔ Add-on)
 
-**Request**: `POST /api/chat` with JSON body containing `system_prompt`, `user_text`, `model`, `session_id`, `auth_mode`, `api_key`.
+**Request**: `POST /api/chat` with JSON body containing `system_prompt`, `user_text`, `model`, `session_id`, `auth_mode`, `api_key`, and for a request heard by an alfred-satellite, `satellite: {node, tv}`.
 
 **Response**: SSE stream with event types:
 - `init` -- session ID and MCP server status
@@ -68,14 +68,16 @@ flowchart LR
 
 - **`server.js`** -- Express HTTP server. Endpoints: `POST /api/chat` (SSE stream), `GET /api/health`, `GET /api/auth/status`, `POST /api/auth/login`. Serves ingress UI.
 - **`agent.js`** -- Runs each turn on a long-lived Agent SDK session from `sessions.js` (moves HA's per-second time line into the user message so sessions can be reused). Auto-adds HA MCP server via SUPERVISOR_TOKEN. Disallows all built-in Claude Code tools (Bash, Read, Write, etc.) -- only MCP tools allowed.
-- **`sessions.js`** -- Session pool: one CLI process per conversation (streaming input, closed after 5 idle minutes) plus one pre-warmed spare (`startup()`), so turns skip CLI start and MCP connect.
+- **`sessions.js`** -- Session pool: one CLI process per conversation (streaming input, closed after 5 idle minutes) plus one pre-warmed spare (`startup()`), so turns skip CLI start and MCP connect. Options are built per process (`makeOptions`), since an in-process MCP server instance serves one process at a time.
+- **`tv.js`** -- In-process `tv` MCP server (`tv_keys`, `tv_volume`, `tv_mute`, `tv_find_remote`, `tv_search`) for a satellite with `tv`: calls its `esphome.<node>_tv_*` actions through HA's API with `SUPERVISOR_TOKEN`.
 - **`auth.js`** -- Dual auth: API key (per-request from integration) and Max subscription (CLI auth persisted in `/data/.claude/`).
 - **`ui/index.html`** -- Ingress web UI showing auth status and Max login button.
 
 #### Integration (`custom_components/claude_conversation_agent/`)
 
 - **`agent.py`** -- `run_agent_loop()` async generator that POSTs to add-on `/api/chat`, reads SSE stream, yields `{"role": "assistant"}` and `{"content": "..."}` dicts. `ConversationStateManager` handles per-session state with TTL-based expiry.
-- **`conversation.py`** -- `ClaudeConversationEntity` wires HA's conversation interface to the agent loop. Pipes deltas into `ChatLog.async_add_delta_content_stream()`.
+- **`conversation.py`** -- `ClaudeConversationEntity` wires HA's conversation interface to the agent loop. Pipes deltas into `ChatLog.async_add_delta_content_stream()`. Obvious TV commands (`tv_commands.py`) skip the agent and call the satellite's TV action directly, with an empty reply.
+- **`satellite_display.py`** -- Finds the alfred-satellite that heard a request (`satellite_client`, `satellite_node`) and mirrors the reply and tool calls to its chat pane.
 - **`config_flow.py`** -- Config flow: hassio discovery or manual URL → auth mode (API key or Max) → conversation subentries.
 - **`__init__.py`** -- Entry setup, health-checks the add-on, stores URL as `runtime_data`. Uses Python 3.12+ `type` statement syntax.
 - **`const.py`** -- All config keys, defaults, and limits.

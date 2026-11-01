@@ -11,6 +11,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { loadMcpServers } from "./mcp-config.js";
 import { SessionPool } from "./sessions.js";
+import { tvServer } from "./tv.js";
 
 const pool = new SessionPool();
 
@@ -108,6 +109,8 @@ function buildAllowedTools(mcpServers) {
  * @param {number} [params.maxTurns]
  * @param {string} params.authMode  - "api_key" or "max"
  * @param {string} [params.apiKey]  - Required when authMode is "api_key"
+ * @param {object} [params.satellite] - The alfred-satellite that heard the
+ *   request: {node, tv}; with tv, the agent gets the TV tools (tv.js) for it
  * @param {function} params.sendEvent - Callback to emit SSE data
  */
 export async function runAgent({
@@ -119,10 +122,12 @@ export async function runAgent({
   maxTurns,
   authMode,
   apiKey,
+  satellite,
   sendEvent,
 }) {
   const mcpServers = buildMcpServers(userMcpServers);
-  const allowedTools = buildAllowedTools(mcpServers);
+  const tvNode = satellite?.tv ? satellite.node : null;
+  const allowedTools = buildAllowedTools(tvNode ? { ...mcpServers, tv: true } : mcpServers);
 
   // Build environment -- API key auth passes the key via env
   const env = { ...process.env };
@@ -164,9 +169,11 @@ export async function runAgent({
   // Options are fixed when a session starts, so a pre-warmed spare can only
   // serve requests with the same options; the key is everything but secrets
   // and callbacks.
-  const key = JSON.stringify({ systemPrompt, model, maxTurns, mcpServers, authMode, apiKey: Boolean(apiKey), thinking });
+  const key = JSON.stringify({ systemPrompt, model, maxTurns, mcpServers, tvNode, authMode, apiKey: Boolean(apiKey), thinking });
+  // Each Claude process gets its own TV server instance.
+  const makeOptions = () => (tvNode ? { ...options, mcpServers: { ...mcpServers, tv: tvServer(tvNode) } } : options);
   const started = Date.now();
-  const { session, how } = await pool.acquire({ sessionId, key, options });
+  const { session, how } = await pool.acquire({ sessionId, key, makeOptions });
 
   let currentSessionId = sessionId || null;
   let textStarted = false;

@@ -12,6 +12,8 @@ class TestNormalize:
         assert normalize("Hey Snoop, turn it up please!") == "turn it up"
         assert normalize("Snoop Dogg, can you pause?") == "pause"
         assert normalize("  Mute.  ") == "mute"
+        assert normalize("Can you please mute the TV?") == "mute the tv"
+        assert normalize("Could you turn it up for me real quick?") == "turn it up"
 
 
 class TestMatch:
@@ -49,6 +51,17 @@ class TestMatch:
     def test_find_remote(self, text):
         assert match(text) == TvCommand("tv_find_remote")
 
+    @pytest.mark.parametrize(
+        ("text", "command"),
+        [
+            ("Yo, Snoop Dogg, I want you. Can you please mute the TV? Mute.", TvCommand("tv_mute")),
+            ("Snoop. Can you please mute the TV?", TvCommand("tv_mute")),
+            ("It's way too loud in here. Turn it down a little.", TvCommand("tv_volume", {"steps": -2})),
+        ],
+    )
+    def test_an_obvious_last_sentence_counts(self, text, command):
+        assert match(text) == command
+
     def test_search(self):
         assert match("Search for Bluey") == TvCommand("tv_search", {"query": "bluey"})
         assert match("search the office") == TvCommand("tv_search", {"query": "the office"})
@@ -82,6 +95,8 @@ class TestMatch:
             "what's on TV",
             "turn off the lights",
             "down " * 21,
+            "Mute the TV. No wait, don't.",
+            "Pause. Actually, what's this movie called?",
         ],
     )
     def test_anything_else_goes_to_the_agent(self, text):

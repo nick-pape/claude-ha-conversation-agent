@@ -79,6 +79,7 @@ async def run_agent_loop(
     temperature: float,
     auth_mode: str = "api_key",
     api_key: str | None = None,
+    satellite: dict[str, Any] | None = None,
 ) -> AsyncGenerator[dict[str, Any]]:
     """Call the Claude Agent add-on and yield text deltas.
 
@@ -87,6 +88,10 @@ async def run_agent_loop(
       - {"content": "text chunk"} -- text delta for TTS
 
     Communicates with the add-on via HTTP POST + SSE streaming.
+
+    satellite names the alfred-satellite that heard the request,
+    {"node": <ESPHome node name>, "tv": <has TV actions>}; with tv the add-on
+    gives the agent TV tools for that satellite.
     """
     payload: dict[str, Any] = {
         "system_prompt": system_prompt,
@@ -98,6 +103,9 @@ async def run_agent_loop(
 
     if api_key:
         payload["api_key"] = api_key
+
+    if satellite:
+        payload["satellite"] = satellite
 
     if conversation_state.session_id:
         payload["session_id"] = conversation_state.session_id

@@ -443,6 +443,29 @@ class TestRunAgentLoopPayload:
         payload = captured["json"]
         assert payload["auth_mode"] == "max"
         assert "api_key" not in payload
+        assert "satellite" not in payload
+
+    @pytest.mark.asyncio
+    async def test_satellite_is_passed_on(self, conversation_state):
+        """The add-on gets the satellite that heard the request, for its TV tools."""
+        events = [{"type": "result", "session_id": "s1", "is_error": False}]
+        captured: dict[str, Any] = {}
+        session_mock = _mock_session_for_events(events, captured=captured)
+
+        with patch("aiohttp.ClientSession", return_value=session_mock):
+            async for _ in run_agent_loop(
+                addon_url="http://my-addon:3000",
+                system_prompt="sys",
+                user_text="mute the tv",
+                conversation_state=conversation_state,
+                model="claude-sonnet-4-5",
+                max_tokens=1024,
+                temperature=1.0,
+                satellite={"node": "alfred-cube", "tv": True},
+            ):
+                pass
+
+        assert captured["json"]["satellite"] == {"node": "alfred-cube", "tv": True}
 
 
 class TestRunAgentLoopErrorHandling:

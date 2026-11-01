@@ -92,6 +92,7 @@ app.post("/api/chat", async (req, res) => {
     max_turns,
     auth_mode,
     api_key,
+    satellite,
   } = req.body;
 
   if (!user_text) {
@@ -120,6 +121,7 @@ app.post("/api/chat", async (req, res) => {
       maxTurns: max_turns || 10,
       authMode: auth_mode || "api_key",
       apiKey: api_key,
+      satellite,
       sendEvent,
     });
   } catch (err) {
