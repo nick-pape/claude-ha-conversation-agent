@@ -17,6 +17,7 @@ from custom_components.claude_conversation_agent.satellite_display import (
     SATELLITE_PROJECT,
     mirror_to_satellite,
     satellite_client,
+    satellite_node,
 )
 
 INTENT_PROGRESS = 100
@@ -64,6 +65,45 @@ class TestSatelliteClient:
         assert satellite_client(hass, "dev1") is None
         hass, _ = _hass_with_device(SATELLITE_PROJECT, domain="wyoming")
         assert satellite_client(hass, "dev1") is None
+
+
+def _hass_with_satellites(*entries: tuple[str, str, str | None]) -> MagicMock:
+    """A hass with ESPHome entries (entry id, node name, project); device "dev1" belongs to entry "e1"."""
+    esphome = [
+        SimpleNamespace(
+            entry_id=entry_id,
+            state=ConfigEntryState.LOADED,
+            runtime_data=SimpleNamespace(device_info=SimpleNamespace(name=name, project_name=project)),
+        )
+        for entry_id, name, project in entries
+    ]
+    hass = MagicMock()
+    hass.config_entries.async_entries.side_effect = lambda domain: esphome if domain == "esphome" else []
+    registry = MagicMock()
+    registry.async_get.side_effect = lambda device_id: (
+        SimpleNamespace(config_entries={"e1"}) if device_id == "dev1" else None
+    )
+    dr.async_get.return_value = registry
+    return hass
+
+
+class TestSatelliteNode:
+    def test_the_satellite_that_heard_it(self):
+        hass = _hass_with_satellites(("e1", "alfred-cube", SATELLITE_PROJECT), ("e2", "alfred-den", SATELLITE_PROJECT))
+        assert satellite_node(hass, "dev1") == "alfred-cube"
+
+    def test_other_esphome_devices_are_not_satellites(self):
+        hass = _hass_with_satellites(("e1", "kitchen-pe", "esphome.voice-assistant"))
+        assert satellite_node(hass, "dev1") is None
+        assert satellite_node(hass, None) is None
+
+    def test_typed_requests_use_the_only_satellite(self):
+        hass = _hass_with_satellites(("e1", "alfred-cube", SATELLITE_PROJECT), ("e3", "kitchen-pe", None))
+        assert satellite_node(hass, None) == "alfred-cube"
+
+    def test_typed_requests_with_two_satellites_have_none(self):
+        hass = _hass_with_satellites(("e1", "alfred-cube", SATELLITE_PROJECT), ("e2", "alfred-den", SATELLITE_PROJECT))
+        assert satellite_node(hass, None) is None
 
 
 class TestMirrorToSatellite:

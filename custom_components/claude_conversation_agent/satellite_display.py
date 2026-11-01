@@ -47,6 +47,27 @@ def satellite_client(hass: HomeAssistant, device_id: str | None) -> Any | None:
     return None
 
 
+def satellite_node(hass: HomeAssistant, device_id: str | None) -> str | None:
+    """ESPHome node name of the alfred-satellite that heard the request.
+
+    A typed request has no device; then the only alfred-satellite in the house,
+    if there is exactly one.
+    """
+    satellites = [
+        (entry.entry_id, entry.runtime_data.device_info.name)
+        for entry in hass.config_entries.async_entries("esphome")
+        if entry.state is ConfigEntryState.LOADED
+        and getattr(getattr(getattr(entry, "runtime_data", None), "device_info", None), "project_name", None)
+        == SATELLITE_PROJECT
+    ]
+    if device_id is None:
+        return satellites[0][1] if len(satellites) == 1 else None
+    device = dr.async_get(hass).async_get(device_id)
+    if device is None:
+        return None
+    return next((name for entry_id, name in satellites if entry_id in device.config_entries), None)
+
+
 async def mirror_to_satellite(
     deltas: AsyncIterator[dict[str, Any]], client: Any
 ) -> AsyncIterator[dict[str, Any]]:

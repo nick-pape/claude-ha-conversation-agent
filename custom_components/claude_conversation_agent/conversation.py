@@ -12,7 +12,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from . import ClaudeAgentConfigEntry
+from . import ClaudeAgentConfigEntry, tv_commands
 from .agent import ConversationStateManager, run_agent_loop
 from .const import (
     AUTH_MODE_API_KEY,
@@ -28,9 +28,12 @@ from .const import (
     DOMAIN,
 )
 from .entity import ClaudeBaseLLMEntity
-from .satellite_display import mirror_to_satellite, satellite_client
+from .satellite_display import mirror_to_satellite, satellite_client, satellite_node
 
 _LOGGER = logging.getLogger(__name__)
+
+# What an obvious TV command says back: nothing, the TV shows it.
+TV_COMMAND_REPLY = ""
 
 
 async def async_setup_entry(
@@ -91,6 +94,15 @@ class ClaudeConversationEntity(
         """Process a conversation turn."""
         options = self.subentry.data
 
+        # 0. Obvious TV commands go straight to the satellite, without the agent.
+        if (command := tv_commands.match(user_input.text)) is not None and await self._async_run_tv_command(
+            user_input, command
+        ):
+            chat_log.async_add_assistant_content_without_tools(
+                conversation.AssistantContent(agent_id=self.entity_id, content=TV_COMMAND_REPLY)
+            )
+            return conversation.async_get_result_from_chat_log(user_input, chat_log)
+
         # 1. Set up system prompt (no HA native tools)
         try:
             await chat_log.async_provide_llm_data(
@@ -143,3 +155,17 @@ class ClaudeConversationEntity(
 
         # 6. Return result from chat_log
         return conversation.async_get_result_from_chat_log(user_input, chat_log)
+
+    async def _async_run_tv_command(
+        self, user_input: conversation.ConversationInput, command: tv_commands.TvCommand
+    ) -> bool:
+        """Run a TV action on the satellite that heard the request; False if it has none."""
+        node = satellite_node(self.hass, user_input.device_id)
+        if node is None:
+            return False
+        service = f"{node.replace('-', '_')}_{command.action}"
+        if not self.hass.services.has_service("esphome", service):
+            return False
+        _LOGGER.debug("TV command %r -> esphome.%s %s", user_input.text, service, command.data)
+        await self.hass.services.async_call("esphome", service, command.data, blocking=False)
+        return True
