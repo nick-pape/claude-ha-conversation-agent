@@ -65,14 +65,18 @@ const DISALLOWED_BUILTIN_TOOLS = [
  * Merges persisted MCP servers (from /data/mcp_servers.json)
  * with any per-request overrides. Persisted servers are the
  * primary source; per-request servers can add or override.
+ * With alwaysLoad, every server's tools are in the prompt from the start
+ * instead of behind tool search.
  */
-function buildMcpServers(userMcpServers) {
+function buildMcpServers(userMcpServers, alwaysLoad) {
   const persisted = loadMcpServers();
   const merged = { ...persisted, ...userMcpServers };
   for (const [name, server] of Object.entries(merged)) {
-    if (server.headers) {
-      merged[name] = { ...server, headers: expandEnv(server.headers) };
-    }
+    merged[name] = {
+      ...server,
+      ...(server.headers && { headers: expandEnv(server.headers) }),
+      ...(alwaysLoad && { alwaysLoad: true }),
+    };
   }
   return merged;
 }
@@ -125,7 +129,10 @@ export async function runAgent({
   satellite,
   sendEvent,
 }) {
-  const mcpServers = buildMcpServers(userMcpServers);
+  // Tool search off: no lookup step mid-turn before a tool call, which costs
+  // voice latency and once had the model write its call out as text.
+  const toolSearch = addonOptions().tool_search || "auto";
+  const mcpServers = buildMcpServers(userMcpServers, toolSearch === "disabled");
   const tvNode = satellite?.tv ? satellite.node : null;
   const allowedTools = buildAllowedTools(tvNode ? { ...mcpServers, tv: true } : mcpServers);
 

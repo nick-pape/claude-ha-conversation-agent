@@ -6,3 +6,10 @@ configuration:
       "disabled" skips thinking for steadier, lower voice latency, and models
       then say a short sentence before using a tool. Not every model accepts
       "disabled".
+  tool_search:
+    name: Tool search
+    description: >-
+      "auto" lets Claude look up MCP tools when it needs them once there are
+      many, at the cost of an extra step mid-turn. "disabled" gives Claude every
+      MCP server's tools up front: no lookup step, which is faster for voice,
+      but a longer prompt.
