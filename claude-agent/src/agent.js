@@ -11,7 +11,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { loadMcpServers } from "./mcp-config.js";
 import { SessionPool } from "./sessions.js";
-import { tvServer } from "./tv.js";
+import { tvServer, tvSystemInfo } from "./tv.js";
 
 const pool = new SessionPool();
 
@@ -134,6 +134,8 @@ export async function runAgent({
   const toolSearch = addonOptions().tool_search || "auto";
   const mcpServers = buildMcpServers(userMcpServers, toolSearch === "disabled");
   const tvNode = satellite?.tv ? satellite.node : null;
+  // What the TV is, for the TV tools' instructions (cached; one call per 10 minutes).
+  const tvInfo = tvNode ? await tvSystemInfo(tvNode) : null;
   const allowedTools = buildAllowedTools(tvNode ? { ...mcpServers, tv: true } : mcpServers);
 
   // Build environment -- API key auth passes the key via env
@@ -176,9 +178,9 @@ export async function runAgent({
   // Options are fixed when a session starts, so a pre-warmed spare can only
   // serve requests with the same options; the key is everything but secrets
   // and callbacks.
-  const key = JSON.stringify({ systemPrompt, model, maxTurns, mcpServers, tvNode, authMode, apiKey: Boolean(apiKey), thinking });
+  const key = JSON.stringify({ systemPrompt, model, maxTurns, mcpServers, tvNode, tvInfo, authMode, apiKey: Boolean(apiKey), thinking });
   // Each Claude process gets its own TV server instance.
-  const makeOptions = () => (tvNode ? { ...options, mcpServers: { ...mcpServers, tv: tvServer(tvNode) } } : options);
+  const makeOptions = () => (tvNode ? { ...options, mcpServers: { ...mcpServers, tv: tvServer(tvNode, tvInfo) } } : options);
   const started = Date.now();
   const { session, how } = await pool.acquire({ sessionId, key, makeOptions });
 

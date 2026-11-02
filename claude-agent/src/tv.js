@@ -8,9 +8,11 @@
  *
  * The Fire TV's own media_player volume and mute don't reach our soundbar (it
  * is on optical), so the instructions steer the model to these tools.
- * tv_status is how the model sees the TV: the satellite replies with JSON
- * (what's on screen as text, the app, what's playing), as screenshots are
- * black in DRM apps.
+ * tv_current_status is how the model sees the TV: the satellite replies with
+ * JSON (what's on screen as text, the app, what's playing), as screenshots are
+ * black in DRM apps. tv_system_info is what the TV is (its apps, equipment and
+ * what each can do), read from the Cube itself; it's fetched once per Claude
+ * process and summed up in the server's instructions (describeTv).
  */
 
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
@@ -29,9 +31,13 @@ const INSTRUCTIONS =
   "(pause, play), moving around on screen and searching. Its media_player " +
   "entities' power, volume and mute don't reach the TV and soundbar the way " +
   "these do, so don't use those for this TV. " +
-  "The other tools act right away and say nothing about the screen; tv_status " +
-  "tells you what's on it. Check it before moving around with tv_keys, and " +
-  "after, to see where you ended up.";
+  "The other tools act right away and say nothing about the screen; " +
+  "tv_current_status tells you what's on it. Check it before moving around " +
+  "with tv_keys, and after, to see where you ended up.";
+
+/** The system info, per satellite, refetched after this long. */
+const SYSTEM_INFO_TTL_MS = 10 * 60 * 1000;
+const systemInfoCache = new Map(); // node -> { at, info }
 
 /**
  * Calls esphome.<node>_<action> with `data`; a tool result either way. With
@@ -63,19 +69,54 @@ async function callAction(node, action, data = {}, { response = false } = {}) {
   }
 }
 
+/** The satellite's tv_system_info, cached; null if it can't be had. */
+export async function tvSystemInfo(node) {
+  const hit = systemInfoCache.get(node);
+  if (hit && Date.now() - hit.at < SYSTEM_INFO_TTL_MS) return hit.info;
+  const result = await callAction(node, "tv_system_info", {}, { response: true });
+  const info = result.isError ? null : JSON.parse(result.content[0].text);
+  if (info) systemInfoCache.set(node, { at: Date.now(), info });
+  return info;
+}
+
+/** A short description of the TV from its system info, for the instructions. */
+export function describeTv(info) {
+  if (!info) return "";
+  const has = (d, f) => (d.functions || []).includes(f);
+  const lines = (info.equipment || []).map((d) => {
+    const can = [];
+    if (has(d, "POWER_ON") && has(d, "POWER_OFF")) can.push("power on/off");
+    else if (has(d, "POWER_TOGGLE")) can.push("power toggles");
+    if (has(d, "VOLUME_UP")) can.push("volume");
+    if (has(d, "MUTE_ON") || has(d, "MUTE_OFF")) can.push("mute on/off");
+    else if (has(d, "MUTE_TOGGLE")) can.push("mute only toggles");
+    if (has(d, "LOCATE_DEVICE")) can.push("can ring");
+    const name = [d.brand, d.name].filter((x, i, a) => x && a.indexOf(x) === i).join(" ");
+    return `${d.type.toLowerCase()}: ${name || "unnamed"} (${[...(d.control || []), ...(d.cec ? ["cec"] : [])].join(", ")}; ${can.join(", ") || "no controls"})`;
+  });
+  const volume = info.fire_tv?.volume_device;
+  const apps = (info.apps || []).map((a) => a.name);
+  return (
+    ` This TV, as set up on its Fire TV (${info.cube?.model}, ${info.cube?.fire_os}): ${lines.join("; ")}.` +
+    (volume ? ` Volume and mute go to the ${volume.toLowerCase()}.` : "") +
+    (apps.length ? ` Installed apps: ${apps.join(", ")}.` : "")
+  );
+}
+
 function failed(text) {
   console.error(`[tv] ${text}`);
   return { content: [{ type: "text", text }], isError: true };
 }
 
 /**
- * The "tv" MCP server for satellite `node`. Build one per Claude process: an
- * in-process server instance serves one process at a time.
+ * The "tv" MCP server for satellite `node`, described with its system info
+ * (tvSystemInfo). Build one per Claude process: an in-process server instance
+ * serves one process at a time.
  */
-export function tvServer(node) {
+export function tvServer(node, info = null) {
   return createSdkMcpServer({
     name: "tv",
-    instructions: INSTRUCTIONS,
+    instructions: INSTRUCTIONS + describeTv(info),
     alwaysLoad: true, // a handful of small tools; skip the tool-search round trip
     tools: [
       tool(
@@ -123,23 +164,30 @@ export function tvServer(node) {
       ),
       tool(
         "tv_launch",
-        "Open an app on the TV by name: Netflix, Prime Video, YouTube, Disney+, " +
-          "Max, Hulu, Peacock, Paramount+, Tubi, Spotify and others (tv_status " +
-          "lists what's installed). Turn the TV on first if it's off.",
+        "Open an installed app on the TV by name (the instructions list them). " +
+          "Turn the TV on first if it's off.",
         { app: z.string().min(1).describe("The app's name, or its Android package") },
         ({ app }) => callAction(node, "tv_launch", { app }),
       ),
       tool(
-        "tv_status",
+        "tv_current_status",
         "What the TV is doing now, as JSON: screen (on, off, screensaver), " +
           "audio_output (tv, or cube speaker when the TV is off), the app in " +
-          "front, media that's playing or paused, on_screen (focused: what the " +
-          "remote's cursor is on; selected tabs; items you can move to, each with " +
-          "its center on the 1920x1080 screen; other text) and installed apps. " +
-          "Apps that draw their own UI, like Netflix, have no on-screen text. " +
-          "Takes about 2 seconds.",
+          "front, media that's playing or paused, and on_screen (focused: what " +
+          "the remote's cursor is on; selected tabs; items you can move to, each " +
+          "with its center on the 1920x1080 screen; other text). Apps that draw " +
+          "their own UI, like Netflix, have no on-screen text. About 2 seconds.",
         {},
-        () => callAction(node, "tv_status", {}, { response: true }),
+        () => callAction(node, "tv_current_status", {}, { response: true }),
+      ),
+      tool(
+        "tv_system_info",
+        "What the TV is, as JSON, read from it: the Fire TV, the installed apps " +
+          "(with what requests each takes), the equipment (TV, soundbar, remote) " +
+          "with how it's controlled and its functions, and the controls offered. " +
+          "The instructions already sum this up; use it for the details.",
+        {},
+        () => callAction(node, "tv_system_info", {}, { response: true }),
       ),
     ],
   });
