@@ -18,6 +18,7 @@ from custom_components.claude_conversation_agent.satellite_display import (
     mirror_to_satellite,
     satellite_client,
     satellite_node,
+    satellite_nodes,
 )
 
 INTENT_PROGRESS = 100
@@ -100,6 +101,12 @@ class TestSatelliteNode:
     def test_typed_requests_use_the_only_satellite(self):
         hass = _hass_with_satellites(("e1", "alfred-cube", SATELLITE_PROJECT), ("e3", "kitchen-pe", None))
         assert satellite_node(hass, None) == "alfred-cube"
+
+    def test_all_satellites_are_listed(self):
+        hass = _hass_with_satellites(
+            ("e1", "alfred-cube", SATELLITE_PROJECT), ("e2", "alfred-den", SATELLITE_PROJECT), ("e3", "kitchen-pe", None)
+        )
+        assert satellite_nodes(hass) == [("e1", "alfred-cube"), ("e2", "alfred-den")]
 
     def test_typed_requests_with_two_satellites_have_none(self):
         hass = _hass_with_satellites(("e1", "alfred-cube", SATELLITE_PROJECT), ("e2", "alfred-den", SATELLITE_PROJECT))

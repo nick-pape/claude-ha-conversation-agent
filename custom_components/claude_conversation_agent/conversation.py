@@ -28,7 +28,7 @@ from .const import (
     DOMAIN,
 )
 from .entity import ClaudeBaseLLMEntity
-from .satellite_display import mirror_to_satellite, satellite_client, satellite_node
+from .satellite_display import mirror_to_satellite, satellite_client, satellite_node, satellite_nodes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -125,7 +125,7 @@ class ClaudeConversationEntity(
         auth_mode = self.entry.data.get(CONF_AUTH_MODE, AUTH_MODE_API_KEY)
         api_key = self.entry.data.get(CONF_API_KEY)
         # 5. Run agent loop through chat_log's streaming interface
-        node = satellite_node(self.hass, user_input.device_id)
+        node = self._tv_node(user_input.device_id) or satellite_node(self.hass, user_input.device_id)
         deltas = run_agent_loop(
             addon_url=addon_url,
             system_prompt=system_prompt,
@@ -158,6 +158,18 @@ class ClaudeConversationEntity(
         # 6. Return result from chat_log
         return conversation.async_get_result_from_chat_log(user_input, chat_log)
 
+    def _tv_node(self, device_id: str | None) -> str | None:
+        """The satellite whose TV a request is about.
+
+        The satellite that heard it; for a typed request (no device), the only
+        satellite with TV actions, since that's the only TV it can mean.
+        """
+        if device_id is not None:
+            node = satellite_node(self.hass, device_id)
+            return node if self._has_tv(node) else None
+        with_tv = [name for _, name in satellite_nodes(self.hass) if self._has_tv(name)]
+        return with_tv[0] if len(with_tv) == 1 else None
+
     def _has_tv(self, node: str | None) -> bool:
         """Whether satellite node offers TV actions (alfred-satellite --tv)."""
         return node is not None and self.hass.services.has_service("esphome", _tv_service(node, "tv_keys"))
@@ -165,8 +177,8 @@ class ClaudeConversationEntity(
     async def _async_run_tv_command(
         self, user_input: conversation.ConversationInput, command: tv_commands.TvCommand
     ) -> bool:
-        """Run a TV action on the satellite that heard the request; False if it has none."""
-        node = satellite_node(self.hass, user_input.device_id)
+        """Run a TV action on the satellite the request is about; False if it has none."""
+        node = self._tv_node(user_input.device_id)
         if node is None:
             return False
         # A satellite offers only the actions it can run (no TV id, no tv_turn_on).
