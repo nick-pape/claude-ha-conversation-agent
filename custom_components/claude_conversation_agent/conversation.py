@@ -167,9 +167,12 @@ class ClaudeConversationEntity(
     ) -> bool:
         """Run a TV action on the satellite that heard the request; False if it has none."""
         node = satellite_node(self.hass, user_input.device_id)
-        if not self._has_tv(node):
+        if node is None:
             return False
+        # A satellite offers only the actions it can run (no TV id, no tv_turn_on).
         service = _tv_service(node, command.action)
+        if not self.hass.services.has_service("esphome", service):
+            return False
         _LOGGER.debug("TV command %r -> esphome.%s %s", user_input.text, service, command.data)
         await self.hass.services.async_call("esphome", service, command.data, blocking=False)
         return True

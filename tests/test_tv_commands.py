@@ -62,6 +62,20 @@ class TestMatch:
     def test_an_obvious_last_sentence_counts(self, text, command):
         assert match(text) == command
 
+    @pytest.mark.parametrize(
+        ("text", "action"),
+        [
+            ("Turn on the TV", "tv_turn_on"),
+            ("Snoop, can you turn the TV on?", "tv_turn_on"),
+            ("switch on the television please", "tv_turn_on"),
+            ("TV on", "tv_turn_on"),
+            ("Turn off the TV.", "tv_turn_off"),
+            ("Power the TV off", "tv_turn_off"),
+        ],
+    )
+    def test_power(self, text, action):
+        assert match(text) == TvCommand(action)
+
     def test_search(self):
         assert match("Search for Bluey") == TvCommand("tv_search", {"query": "bluey"})
         assert match("search the office") == TvCommand("tv_search", {"query": "the office"})
@@ -96,6 +110,8 @@ class TestMatch:
             "turn off the lights",
             "down " * 21,
             "Mute the TV. No wait, don't.",
+            "turn on the TV in the bedroom",
+            "turn on the lights",
             "Pause. Actually, what's this movie called?",
         ],
     )

@@ -69,7 +69,7 @@ flowchart LR
 - **`server.js`** -- Express HTTP server. Endpoints: `POST /api/chat` (SSE stream), `GET /api/health`, `GET /api/auth/status`, `POST /api/auth/login`. Serves ingress UI.
 - **`agent.js`** -- Runs each turn on a long-lived Agent SDK session from `sessions.js` (moves HA's per-second time line into the user message so sessions can be reused). Auto-adds HA MCP server via SUPERVISOR_TOKEN. Disallows all built-in Claude Code tools (Bash, Read, Write, etc.) -- only MCP tools allowed. The `tool_search: disabled` add-on option loads every MCP server's tools up front (`alwaysLoad`) instead of behind tool search.
 - **`sessions.js`** -- Session pool: one CLI process per conversation (streaming input, closed after 5 idle minutes) plus one pre-warmed spare (`startup()`), so turns skip CLI start and MCP connect. Options are built per process (`makeOptions`), since an in-process MCP server instance serves one process at a time.
-- **`tv.js`** -- In-process `tv` MCP server (`tv_keys`, `tv_volume`, `tv_mute`, `tv_find_remote`, `tv_search`) for a satellite with `tv`: calls its `esphome.<node>_tv_*` actions through HA's API with `SUPERVISOR_TOKEN`.
+- **`tv.js`** -- In-process `tv` MCP server (`tv_keys`, `tv_volume`, `tv_mute`, `tv_power`, `tv_find_remote`, `tv_search`) for a satellite with `tv`: calls its `esphome.<node>_tv_*` actions through HA's API with `SUPERVISOR_TOKEN`.
 - **`auth.js`** -- Dual auth: API key (per-request from integration) and Max subscription (CLI auth persisted in `/data/.claude/`).
 - **`ui/index.html`** -- Ingress web UI showing auth status and Max login button.
 

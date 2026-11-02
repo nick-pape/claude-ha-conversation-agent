@@ -22,9 +22,10 @@ const KEYS = [
 
 const INSTRUCTIONS =
   "These tools control the TV in the room the user is talking from: a Fire TV " +
-  "with a soundbar. Use them for its sound (volume, mute), playback (pause, " +
-  "play), moving around on screen and searching. Its media_player entities' " +
-  "volume and mute don't reach the soundbar, so don't use those for this TV. " +
+  "with a soundbar. Use them for its power, sound (volume, mute), playback " +
+  "(pause, play), moving around on screen and searching. Its media_player " +
+  "entities' power, volume and mute don't reach the TV and soundbar the way " +
+  "these do, so don't use those for this TV. " +
   "Each tool acts right away and says nothing back about the screen.";
 
 /** Calls esphome.<node>_<action> with `data`; a tool result either way. */
@@ -85,6 +86,13 @@ export function tvServer(node) {
           "reports whether it is muted now, so one call serves both.",
         {},
         () => callAction(node, "tv_mute"),
+      ),
+      tool(
+        "tv_power",
+        "Turn the TV on or off, the way Alexa does: on also switches the TV to " +
+          "the Fire TV.",
+        { on: z.boolean().describe("true to turn the TV on, false to turn it off") },
+        ({ on }) => callAction(node, on ? "tv_turn_on" : "tv_turn_off"),
       ),
       tool(
         "tv_find_remote",

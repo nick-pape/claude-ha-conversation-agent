@@ -77,6 +77,12 @@ def _match(t: str) -> TvCommand | None:
         return TvCommand("tv_keys", {"keys": "pause"})
     if re.fullmatch("(?:play|unpause|resume|continue)" + _OBJECT, t):
         return TvCommand("tv_keys", {"keys": "play"})
+    if m := (
+        re.fullmatch(r"(?:turn|switch|power) (on|off) (?:the )?(?:tv|television)", t)
+        or re.fullmatch(r"(?:turn|switch|power) (?:the )?(?:tv|television) (on|off)", t)
+        or re.fullmatch(r"(?:tv|television) (on|off)", t)
+    ):
+        return TvCommand(f"tv_turn_{m.group(1)}")
     if re.fullmatch(r"(?:find|ring|where's|where is) (?:my |the )?remote", t):
         return TvCommand("tv_find_remote")
     if m := re.fullmatch(r"search (?:for )?(.+)", t):
